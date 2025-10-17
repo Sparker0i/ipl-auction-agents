@@ -1,0 +1,28 @@
+export const AUCTION_SETS = {
+  MARQUEE: ['M1', 'M2'],
+  BATSMEN: ['BA1', 'BA2', 'BA3', 'BA4', 'BA5'],
+  ALL_ROUNDERS: ['AL1', 'AL2', 'AL3', 'AL4', 'AL5', 'AL6', 'AL7', 'AL8', 'AL9', 'AL10'],
+  WICKET_KEEPERS: ['WK1', 'WK2', 'WK3', 'WK4'],
+  FAST_BOWLERS: ['FA1', 'FA2', 'FA3', 'FA4', 'FA5', 'FA6', 'FA7', 'FA8', 'FA9', 'FA10'],
+  SPINNERS: ['SP1', 'SP2', 'SP3'],
+  UNCAPPED_BATSMEN: ['UBA1', 'UBA2', 'UBA3', 'UBA4', 'UBA5', 'UBA6', 'UBA7', 'UBA8', 'UBA9'],
+  UNCAPPED_ALL_ROUNDERS: ['UAL1', 'UAL2', 'UAL3', 'UAL4', 'UAL5', 'UAL6', 'UAL7', 'UAL8', 'UAL9', 'UAL10', 'UAL11', 'UAL12', 'UAL13', 'UAL14', 'UAL15'],
+  UNCAPPED_WICKET_KEEPERS: ['UWK1', 'UWK2', 'UWK3', 'UWK4', 'UWK5', 'UWK6'],
+  UNCAPPED_FAST_BOWLERS: ['UFA1', 'UFA2', 'UFA3', 'UFA4', 'UFA5', 'UFA6', 'UFA7', 'UFA8', 'UFA9', 'UFA10'],
+  UNCAPPED_SPINNERS: ['USP1', 'USP2', 'USP3', 'USP4', 'USP5'],
+} as const;
+
+export const NORMAL_ROUND_SETS = [
+  ...AUCTION_SETS.MARQUEE,
+  'BA1', 'AL1', 'WK1', 'FA1', 'SP1',
+  'UBA1', 'UAL1', 'UWK1', 'UFA1', 'USP1',
+  'BA2', 'AL2', 'WK2', 'FA2', 'SP2',
+];
+
+export const ACCELERATED_ROUND_1_START_SET = 'UBA2';
+
+export const TIMER_DEFAULTS = {
+  NORMAL: 60,
+  ACCELERATED: 40,
+  RTM_COUNTER: 5,
+} as const;
