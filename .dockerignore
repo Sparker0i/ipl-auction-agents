@@ -1,0 +1,14 @@
+node_modules
+dist
+build
+.git
+.env
+.env.local
+*.log
+coverage
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+*.swp
+docker-volumes
