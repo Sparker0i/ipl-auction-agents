@@ -1,0 +1,83 @@
+# version: '3.8'  # Obsolete - Docker Compose now auto-detects version
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: ipl-postgres
+    environment:
+      POSTGRES_USER: ipl_user
+      POSTGRES_PASSWORD: ipl_pass
+      POSTGRES_DB: ipl_auction
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ipl_user -d ipl_auction"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: ipl-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.backend
+      target: development  # Use 'production' for prod deployment
+    container_name: ipl-backend
+    environment:
+      DATABASE_URL: postgresql://ipl_user:ipl_pass@postgres:5432/ipl_auction?schema=public
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      NODE_ENV: development
+      PORT: 4000
+      CORS_ORIGIN: http://localhost:3000
+    ports:
+      - "4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: pnpm --filter backend dev
+
+  frontend:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.frontend
+      target: development  # Use 'production' for prod deployment
+    container_name: ipl-frontend
+    environment:
+      VITE_API_URL: http://localhost:4000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    command: pnpm --filter frontend dev
+
+  nginx:
+    image: nginx:alpine
+    container_name: ipl-nginx
+    ports:
+      - "8080:80"  # Changed from 80 to 8080 for rootless Podman compatibility
+    volumes:
+      - ./infrastructure/docker/nginx.conf:/etc/nginx/nginx.conf:ro,z  # :z for SELinux
+    depends_on:
+      - backend
+      - frontend
+
+volumes:
+  postgres_data:
+  redis_data:

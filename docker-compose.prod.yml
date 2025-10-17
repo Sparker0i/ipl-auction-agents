@@ -1,0 +1,38 @@
+# Production Docker Compose Configuration
+# Usage: docker compose -f docker-compose.yml -f docker-compose.prod.yml up
+
+services:
+  postgres:
+    restart: always
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_in_production}
+
+  redis:
+    restart: always
+    command: redis-server --requirepass ${REDIS_PASSWORD:-change_me_in_production}
+
+  backend:
+    build:
+      target: production
+    restart: always
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-ipl_user}:${POSTGRES_PASSWORD:-ipl_pass}@postgres:5432/${POSTGRES_DB:-ipl_auction}?schema=public
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-change_me_in_production}
+    # Remove dev command override
+    command: ["node", "apps/backend/dist/main.js"]
+
+  frontend:
+    build:
+      target: production
+    restart: always
+    # Override to remove dev command from base compose file
+    command: []
+
+  nginx:
+    restart: always
+    ports:
+      - "8080:80"  # HTTP port (rootless compatible)
+      - "8443:443"  # HTTPS port mapped to 8443 for rootless compatibility
