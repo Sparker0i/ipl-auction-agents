@@ -38,12 +38,12 @@ services:
       target: development  # Use 'production' for prod deployment
     container_name: ipl-backend
     environment:
-      DATABASE_URL: postgresql://ipl_user:ipl_pass@postgres:5432/ipl_auction?schema=public
+      DATABASE_URL: postgresql://ipl_user:ipl_pass@postgres:5432/ipl_auction?schema=public&connection_limit=10&pool_timeout=20
       REDIS_HOST: redis
       REDIS_PORT: 6379
       NODE_ENV: development
       PORT: 4000
-      CORS_ORIGIN: http://localhost:3000
+      CORS_ORIGIN: http://localhost:8080
     ports:
       - "4000:4000"
     depends_on:
@@ -60,12 +60,12 @@ services:
       target: development  # Use 'production' for prod deployment
     container_name: ipl-frontend
     environment:
-      VITE_API_URL: http://localhost:4000
+      VITE_API_URL: /api
     ports:
       - "3000:3000"
     depends_on:
       - backend
-    command: pnpm --filter frontend dev
+    command: pnpm --filter frontend dev --host 0.0.0.0
 
   nginx:
     image: nginx:alpine

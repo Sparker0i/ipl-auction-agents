@@ -17,10 +17,12 @@ services:
     restart: always
     environment:
       NODE_ENV: production
-      DATABASE_URL: postgresql://${POSTGRES_USER:-ipl_user}:${POSTGRES_PASSWORD:-ipl_pass}@postgres:5432/${POSTGRES_DB:-ipl_auction}?schema=public
+      # Connection pooling: 20 connections for production (adjust based on PostgreSQL max_connections)
+      DATABASE_URL: postgresql://${POSTGRES_USER:-ipl_user}:${POSTGRES_PASSWORD:-ipl_pass}@postgres:5432/${POSTGRES_DB:-ipl_auction}?schema=public&connection_limit=30&pool_timeout=20
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-change_me_in_production}
+      CORS_ORIGIN: http://localhost:8080
     # Remove dev command override
     command: ["node", "apps/backend/dist/main.js"]
 
