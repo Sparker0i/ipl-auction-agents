@@ -1,0 +1,185 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Player {
+  id           String   @id @default(uuid())
+  name         String   @db.VarChar(100)
+  country      String   @db.VarChar(50)
+  age          Int?
+  role         String   @db.VarChar(30) // 'BATTER', 'BOWLER', 'ALL-ROUNDER', 'WICKETKEEPER'
+  specialism   String?  @db.VarChar(100) // 'RIGHT ARM Fast', 'LEFT ARM Slow Orthodox', etc.
+  basePriceLakh Int?    // in lakhs (30, 50, 75, 100, 125, 150, 200) - only for auction players
+  auctionSet   String?  @db.VarChar(10) // 'M1', 'BA3', 'UAL5', etc. - only for auction players
+  isCapped     Boolean  @default(false) // Capped/Uncapped/Associate
+  isOverseas   Boolean  @default(false)
+  iplTeam2024  String?  @db.VarChar(10) // 'RCB', 'CSK', 'MI', etc. (for RTM)
+  iplMatches   Int?     // 2024 IPL matches played
+  createdAt    DateTime @default(now())
+
+  // Relations
+  teamPlayers   TeamPlayer[]
+  auctionEvents AuctionEvent[]
+  currentForAuction Auction[]
+  stats         PlayerStats?
+  performances  PlayerPerformance[]
+
+  @@index([auctionSet])
+  @@index([role])
+  @@index([iplTeam2024])
+  @@map("players")
+}
+
+model Auction {
+  id                   String   @id @default(uuid())
+  name                 String   @db.VarChar(100)
+  roomCode             String?  @unique @db.VarChar(6) // for private auctions
+  type                 String   @db.VarChar(10) // 'public', 'private'
+  status               String   @default("waiting") @db.VarChar(20) // 'waiting', 'in_progress', 'completed'
+  currentRound         String?  @db.VarChar(20) // 'normal', 'accelerated_1', 'accelerated_2'
+  currentSet           String?  @db.VarChar(10) // 'M1', 'BA2', etc.
+  currentPlayerId      String?
+  currentBidLakh       Int?     // in lakhs
+  currentBiddingTeamId String?
+  timerSeconds         Int      @default(60)
+  adminSessionId       String   @db.VarChar(100)
+  createdAt            DateTime @default(now())
+  startedAt            DateTime?
+  endedAt              DateTime?
+
+  // Relations
+  currentPlayer       Player?       @relation(fields: [currentPlayerId], references: [id])
+  currentBiddingTeam  AuctionTeam?  @relation("CurrentBidding", fields: [currentBiddingTeamId], references: [id])
+  teams               AuctionTeam[]
+  events              AuctionEvent[]
+
+  @@index([status])
+  @@index([roomCode])
+  @@map("auctions")
+}
+
+model AuctionTeam {
+  id                String    @id @default(uuid())
+  auctionId         String
+  teamName          String    @db.VarChar(10) // 'RCB', 'CSK', 'MI', etc.
+  ownerSessionId    String?   @db.VarChar(100) // user session controlling team
+  basePurseCr       Decimal   @default(120.00) @db.Decimal(5, 2) // ₹120cr
+  retentionCostCr   Decimal   @default(0) @db.Decimal(5, 2)
+  purseRemainingCr  Decimal   @db.Decimal(5, 2)
+  rtmCardsTotal     Int       @default(0)
+  rtmCardsUsed      Int       @default(0)
+  rtmCappedUsed     Int       @default(0) // Track capped RTM usage (max 5)
+  rtmUncappedUsed   Int       @default(0) // Track uncapped RTM usage (max 2)
+  playerCount       Int       @default(0)
+  overseasCount     Int       @default(0)
+  joinedAt          DateTime?
+
+  // Relations
+  auction       Auction        @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  players       TeamPlayer[]
+  events        AuctionEvent[]
+  currentBidFor Auction[]      @relation("CurrentBidding")
+
+  @@unique([auctionId, teamName])
+  @@index([auctionId])
+  @@map("auction_teams")
+}
+
+model TeamPlayer {
+  id                String   @id @default(uuid())
+  teamId            String
+  playerId          String
+  purchasePriceCr   Decimal  @db.Decimal(5, 2) // final price in crores
+  isRetained        Boolean  @default(false)
+  retentionPriceCr  Decimal? @db.Decimal(5, 2) // for retained players
+  acquiredAt        DateTime @default(now())
+
+  // Relations
+  team   AuctionTeam @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  player Player      @relation(fields: [playerId], references: [id])
+
+  @@unique([teamId, playerId])
+  @@index([teamId])
+  @@index([playerId])
+  @@map("team_players")
+}
+
+model AuctionEvent {
+  id          String   @id @default(uuid())
+  auctionId   String
+  playerId    String
+  eventType   String   @db.VarChar(20) // 'BID', 'SOLD', 'UNSOLD', 'RTM_USED', 'PASSED'
+  teamId      String?
+  bidAmountCr Decimal? @db.Decimal(5, 2)
+  metadata    Json?    // { rtm: true, round: 'AR1', set: 'M1' }
+  timestamp   DateTime @default(now())
+
+  // Relations
+  auction Auction      @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  player  Player       @relation(fields: [playerId], references: [id])
+  team    AuctionTeam? @relation(fields: [teamId], references: [id])
+
+  @@index([auctionId])
+  @@index([timestamp])
+  @@map("auction_events")
+}
+
+model PlayerStats {
+  id            String   @id @default(uuid())
+  playerId      String   @unique
+  battingStats  Json?    // BattingStats JSON
+  bowlingStats  Json?    // BowlingStats JSON
+  fieldingStats Json?    // FieldingStats JSON
+  lastUpdated   DateTime @default(now()) @updatedAt
+
+  // Relations
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@index([playerId])
+  @@map("player_stats")
+}
+
+model Match {
+  id        String   @id @default(uuid())
+  matchId   String   @unique
+  date      DateTime?
+  venue     String?  @db.VarChar(100)
+  matchType String?  @db.VarChar(50)
+  teams     Json?    // Array of team names
+  createdAt DateTime @default(now())
+
+  // Relations
+  performances PlayerPerformance[]
+
+  @@index([matchId])
+  @@index([venue])
+  @@map("matches")
+}
+
+model PlayerPerformance {
+  id         String   @id @default(uuid())
+  playerId   String
+  matchId    String
+  playerName String   @db.VarChar(100) // Denormalized for easier queries
+  batting    Json?    // Batting performance JSON
+  bowling    Json?    // Bowling performance JSON
+  fielding   Json?    // Fielding performance JSON
+  createdAt  DateTime @default(now())
+
+  // Relations
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  match  Match  @relation(fields: [matchId], references: [id], onDelete: Cascade)
+
+  @@unique([playerId, matchId])
+  @@index([playerId])
+  @@index([matchId])
+  @@map("player_performances")
+}

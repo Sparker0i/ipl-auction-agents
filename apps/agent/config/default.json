@@ -1,0 +1,50 @@
+{
+  "orchestrator": {
+    "maxConcurrentAgents": 9,
+    "agentHealthCheckInterval": 20000,
+    "agentRestartAttempts": 3,
+    "agentStaggerDelay": 3000,
+    "heartbeatTimeout": 360000
+  },
+  "browser": {
+    "headless": true,
+    "viewport": {
+      "width": 800,
+      "height": 600
+    },
+    "slowMo": 0,
+    "timeout": 10000,
+    "executablePath": null
+  },
+  "llm": {
+    "provider": "ollama",
+    "baseUrl": "http://localhost:11434",
+    "model": "llama3.1:8b",
+    "temperature": 0.3,
+    "timeout": 5000,
+    "fallbackOnTimeout": true
+  },
+  "auction": {
+    "frontendUrl": "http://localhost:8080",
+    "bidDelayMs": 300,
+    "stateCheckIntervalMs": 5000
+  },
+  "logging": {
+    "level": "info",
+    "directory": "./logs",
+    "maxFileSize": "10MB",
+    "maxFiles": 5
+  },
+  "teams": [
+    "CSK",
+    "MI",
+    "RCB",
+    "DC",
+    "PBKS",
+    "RR",
+    "KKR",
+    "LSG",
+    "SRH",
+    "GT"
+  ]
+}
