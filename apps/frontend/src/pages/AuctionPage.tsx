@@ -182,6 +182,10 @@ export default function AuctionPage() {
             biddingTeamId: data.currentPlayer.biddingTeamId,
           })
         );
+
+        // Dispatch custom event for agents
+        const event = new CustomEvent('auction-player-update', { detail: data.currentPlayer });
+        window.dispatchEvent(event);
       } else {
         dispatch(setCurrentPlayer(null));
         dispatch(setCurrentBid(null));
@@ -203,6 +207,29 @@ export default function AuctionPage() {
       }
       if (data.auction.currentSet) {
         dispatch(setCurrentSet(data.auction.currentSet));
+      }
+    });
+
+    // Listen for auction started (includes first player)
+    socketService.on('auction_started', (data: any) => {
+      console.log('🎬 Auction started:', data);
+
+      // If first player is included, process it
+      if (data.firstPlayer) {
+        dispatch(setCurrentPlayer(data.firstPlayer));
+        dispatch(
+          setCurrentBid({
+            playerId: data.firstPlayer.id,
+            currentBidLakh: null,
+            biddingTeamId: null,
+          })
+        );
+        dispatch(clearBidHistory());
+        dispatch(clearRTMState());
+
+        // Dispatch custom event for agents
+        const event = new CustomEvent('auction-player-update', { detail: data.firstPlayer });
+        window.dispatchEvent(event);
       }
     });
 
@@ -240,6 +267,10 @@ export default function AuctionPage() {
           })
         );
       }
+
+      // Dispatch custom event for agents
+      const event = new CustomEvent('auction-bid-update', { detail: data });
+      window.dispatchEvent(event);
     });
 
     // Listen for new player
@@ -263,6 +294,10 @@ export default function AuctionPage() {
       // Update round/set if provided
       if (data.currentRound) dispatch(setCurrentRound(data.currentRound));
       if (data.currentSet) dispatch(setCurrentSet(data.currentSet));
+
+      // Dispatch custom event for agents
+      const event = new CustomEvent('auction-player-update', { detail: data.player });
+      window.dispatchEvent(event);
     });
 
     // Listen for player sold
@@ -325,18 +360,44 @@ export default function AuctionPage() {
       }
 
       // Current player will be cleared when next player loads
+
+      // Dispatch custom event for agents
+      const event = new CustomEvent('auction-player-sold', { detail: data });
+      window.dispatchEvent(event);
+    });
+
+    // Listen for player unsold
+    socketService.on('player_unsold', (data: any) => {
+      console.log('Player unsold:', data);
+
+      // Clear RTM state
+      dispatch(clearRTMState());
+
+      // Current player will be cleared when next player loads
+
+      // Dispatch custom event for agents
+      const event = new CustomEvent('auction-player-unsold', { detail: data });
+      window.dispatchEvent(event);
     });
 
     // Listen for RTM triggered
     socketService.on('rtm_triggered', (data: any) => {
       console.log('RTM triggered:', data);
       dispatch(setRTMState(data));
+
+      // Dispatch custom event for agents
+      const event = new CustomEvent('auction-rtm-triggered', { detail: data });
+      window.dispatchEvent(event);
     });
 
     // Listen for RTM used
     socketService.on('rtm_used', (data: any) => {
       console.log('🎯 RTM used:', data);
       dispatch(setRTMState(data));
+
+      // Dispatch custom event for agents
+      const event = new CustomEvent('auction-rtm-used', { detail: data });
+      window.dispatchEvent(event);
     });
 
     // Listen for counter-bid placed
@@ -344,6 +405,10 @@ export default function AuctionPage() {
       console.log('💰 Counter-bid placed:', data);
       // Backend sends full RTM state with counterBidMade: true
       dispatch(setRTMState(data));
+
+      // Dispatch custom event for agents
+      const event = new CustomEvent('auction-rtm-counter-bid', { detail: data });
+      window.dispatchEvent(event);
     });
 
     // Listen for round completed
@@ -392,6 +457,7 @@ export default function AuctionPage() {
 
     return () => {
       socketService.off('auction_joined');
+      socketService.off('auction_started');
       socketService.off('bid_placed');
       socketService.off('new_player');
       socketService.off('player_sold');
@@ -444,20 +510,11 @@ export default function AuctionPage() {
 
   // Check if AR1 is complete (no more players available) and auto-transition to AR2
   useEffect(() => {
-    console.log('🔍 AR1 Check Effect Running:', {
-      auctionId,
-      currentRound: auctionState.currentRound,
-      currentPlayer: currentPlayer?.name,
-      isAdmin,
-    });
-
     if (!auctionId || auctionState.currentRound !== 'accelerated_1' || !isAdmin) {
-      console.log('🔍 AR1 Check Skipped:', { auctionId, currentRound: auctionState.currentRound, isAdmin });
       return;
     }
 
     const checkAR1CompleteAndTransition = async () => {
-      console.log('🔍 Fetching AR1 players...');
       try {
         const data = await auctionApi.getAvailableAR1Players(auctionId);
         const hasPlayersLeft = data.players && data.players.length > 0;
@@ -467,8 +524,6 @@ export default function AuctionPage() {
           console.log('🚀 AR1 complete (via useEffect), auto-transitioning to AR2...');
           await auctionApi.transitionToAR2(auctionId, adminToken);
           console.log('✅ Auto-transitioned to AR2');
-        } else {
-          console.log(`🔍 AR1 Completion Check: ${hasPlayersLeft ? `${data.players.length} players remaining` : 'AR1 complete but no admin token'}`);
         }
 
         setIsAR1Complete(!hasPlayersLeft);
@@ -707,13 +762,6 @@ export default function AuctionPage() {
     ? teams.find(t => t.id === currentBidState.biddingTeamId)
     : null;
 
-  // Debug logging
-  console.log('🔍 Current Bid Debug:', {
-    currentBidState,
-    currentBid,
-    basePriceLakh: currentPlayer?.basePriceLakh
-  });
-
   // For bidding logic, calculate next bid
   let nextBid: number;
   let increment: number;
@@ -734,7 +782,10 @@ export default function AuctionPage() {
   const isMyTeamCurrentBidder = currentBidState?.biddingTeamId === myTeamId;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-blue-800">
+    <div
+      className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-blue-800"
+      data-auction-started={auctionState.status === 'in_progress' ? 'true' : undefined}
+    >
       <div className="container mx-auto px-4 py-6">
         {/* Header */}
         <div className="bg-white rounded-xl shadow-2xl p-4 mb-6">
@@ -1068,6 +1119,7 @@ export default function AuctionPage() {
                         onClick={handlePlaceBid}
                         disabled={bidding || !canBid || !!rtmState || isMyTeamCurrentBidder}
                         className="w-full bg-green-600 text-white px-8 py-4 rounded-xl hover:bg-green-700 transition-colors font-bold text-xl disabled:bg-gray-400 disabled:cursor-not-allowed"
+                        data-bid-button
                       >
                         {bidding ? 'Placing Bid...' : rtmState ? 'RTM in Progress...' : isMyTeamCurrentBidder ? 'Waiting for Other Teams...' : increment > 0 ? `Bid ₹${nextBid / 100} cr (+₹${increment}L)` : `Bid ₹${nextBid / 100} cr`}
                       </button>
