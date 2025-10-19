@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ipl-auction-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ipl_user
+      POSTGRES_PASSWORD: ipl_password
+      POSTGRES_DB: ipl_auction
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ipl_user -d ipl_auction"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+    driver: local
