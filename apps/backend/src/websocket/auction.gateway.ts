@@ -35,6 +35,23 @@ interface AdminActionPayload {
   playerId?: string;
 }
 
+/**
+ * Helper function to safely convert purseRemainingCr to number
+ * Handles both Prisma Decimal objects (from DB) and plain numbers (from cache)
+ */
+function toNumber(value: any): number {
+  if (typeof value === 'number') {
+    return value;
+  }
+  if (typeof value === 'string') {
+    return parseFloat(value);
+  }
+  if (value && typeof value.toNumber === 'function') {
+    return value.toNumber();
+  }
+  return Number(value);
+}
+
 @WebSocketGateway({
   cors: {
     origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
@@ -124,14 +141,24 @@ export class AuctionGateway implements OnGatewayConnection, OnGatewayDisconnect 
     try {
       const { auctionId, teamId, sessionId } = payload;
 
-      // Verify auction exists
-      const auction = await this.prisma.auction.findUnique({
-        where: { id: auctionId },
-        include: {
-          teams: true,
-          currentPlayer: true,
-        },
-      });
+      // Try to get auction from cache first
+      let auction = await this.redis.getCachedAuction(auctionId);
+
+      if (!auction) {
+        // Cache miss - fetch from database
+        auction = await this.prisma.auction.findUnique({
+          where: { id: auctionId },
+          include: {
+            teams: true,
+            currentPlayer: true,
+          },
+        });
+
+        // Cache for 30 seconds
+        if (auction) {
+          await this.redis.cacheAuction(auctionId, auction, 30);
+        }
+      }
 
       if (!auction) {
         client.emit('error', {
@@ -142,7 +169,7 @@ export class AuctionGateway implements OnGatewayConnection, OnGatewayDisconnect 
       }
 
       // Verify team belongs to this user
-      const team = auction.teams.find(t => t.id === teamId);
+      const team = auction.teams.find((t: any) => t.id === teamId);
       if (!team || team.ownerSessionId !== sessionId) {
         client.emit('error', {
           code: 'UNAUTHORIZED_TEAM',
@@ -173,7 +200,7 @@ export class AuctionGateway implements OnGatewayConnection, OnGatewayDisconnect 
         myTeam: {
           id: team.id,
           teamName: team.teamName,
-          purseRemainingCr: team.purseRemainingCr.toNumber(),
+          purseRemainingCr: toNumber(team.purseRemainingCr),
           rtmCardsTotal: team.rtmCardsTotal,
           rtmCardsUsed: team.rtmCardsUsed,
           rtmCappedUsed: team.rtmCappedUsed,
@@ -181,10 +208,10 @@ export class AuctionGateway implements OnGatewayConnection, OnGatewayDisconnect 
           playerCount: team.playerCount,
           overseasCount: team.overseasCount,
         },
-        allTeams: auction.teams.map(t => ({
+        allTeams: auction.teams.map((t: any) => ({
           id: t.id,
           teamName: t.teamName,
-          purseRemainingCr: t.purseRemainingCr.toNumber(),
+          purseRemainingCr: toNumber(t.purseRemainingCr),
           rtmCardsTotal: t.rtmCardsTotal,
           rtmCardsUsed: t.rtmCardsUsed,
           rtmCappedUsed: t.rtmCappedUsed,
@@ -276,14 +303,22 @@ export class AuctionGateway implements OnGatewayConnection, OnGatewayDisconnect 
         return;
       }
 
-      // Verify admin
-      const auction = await this.prisma.auction.findUnique({
-        where: { id: auctionId },
-        include: {
-          currentPlayer: true,
-          currentBiddingTeam: true,
-        },
-      });
+      // Try cache first, then database
+      let auction = await this.redis.getCachedAuction(auctionId);
+
+      if (!auction) {
+        auction = await this.prisma.auction.findUnique({
+          where: { id: auctionId },
+          include: {
+            currentPlayer: true,
+            currentBiddingTeam: true,
+          },
+        });
+
+        if (auction) {
+          await this.redis.cacheAuction(auctionId, auction, 30);
+        }
+      }
 
       if (!auction || auction.adminSessionId !== adminSessionId) {
         client.emit('error', {
@@ -338,6 +373,10 @@ export class AuctionGateway implements OnGatewayConnection, OnGatewayDisconnect 
           return;
         }
 
+        // Invalidate caches after sale (auction and team changed)
+        await this.redis.invalidateAuctionCache(auctionId);
+        await this.redis.invalidateTeamCache(result.team.id);
+
         // Fetch updated team stats after sale
         const updatedTeam = await this.prisma.auctionTeam.findUnique({
           where: { id: result.team.id },
@@ -354,7 +393,7 @@ export class AuctionGateway implements OnGatewayConnection, OnGatewayDisconnect 
           winningTeam: updatedTeam ? {
             id: updatedTeam.id,
             teamName: updatedTeam.teamName,
-            purseRemainingCr: updatedTeam.purseRemainingCr.toNumber(),
+            purseRemainingCr: toNumber(updatedTeam.purseRemainingCr),
             playerCount: updatedTeam.playerCount,
             overseasCount: updatedTeam.overseasCount,
           } : undefined,
@@ -432,10 +471,18 @@ export class AuctionGateway implements OnGatewayConnection, OnGatewayDisconnect 
         return;
       }
 
-      // Verify admin
-      const auction = await this.prisma.auction.findUnique({
-        where: { id: auctionId },
-      });
+      // Try cache first for admin verification
+      let auction = await this.redis.getCachedAuction(auctionId);
+
+      if (!auction) {
+        auction = await this.prisma.auction.findUnique({
+          where: { id: auctionId },
+        });
+
+        if (auction) {
+          await this.redis.cacheAuction(auctionId, auction, 30);
+        }
+      }
 
       if (!auction || auction.adminSessionId !== adminSessionId) {
         client.emit('error', {
@@ -526,10 +573,18 @@ export class AuctionGateway implements OnGatewayConnection, OnGatewayDisconnect 
     try {
       const { auctionId, adminSessionId } = payload;
 
-      // Verify admin
-      const auction = await this.prisma.auction.findUnique({
-        where: { id: auctionId },
-      });
+      // Try cache first for admin verification
+      let auction = await this.redis.getCachedAuction(auctionId);
+
+      if (!auction) {
+        auction = await this.prisma.auction.findUnique({
+          where: { id: auctionId },
+        });
+
+        if (auction) {
+          await this.redis.cacheAuction(auctionId, auction, 30);
+        }
+      }
 
       if (!auction || auction.adminSessionId !== adminSessionId) {
         client.emit('error', {
@@ -760,6 +815,13 @@ export class AuctionGateway implements OnGatewayConnection, OnGatewayDisconnect 
         },
       });
 
+      // Invalidate caches after RTM finalization
+      await this.redis.invalidateAuctionCache(auctionId);
+      await this.redis.invalidateTeamCache(result.winningTeamId);
+      if (rtmState.rtmTeamId) {
+        await this.redis.invalidateTeamCache(rtmState.rtmTeamId);
+      }
+
       // Fetch updated team stats after RTM finalization
       const updatedTeam = await this.prisma.auctionTeam.findUnique({
         where: { id: result.winningTeamId },
@@ -782,7 +844,7 @@ export class AuctionGateway implements OnGatewayConnection, OnGatewayDisconnect 
         winningTeam: updatedTeam ? {
           id: updatedTeam.id,
           teamName: updatedTeam.teamName,
-          purseRemainingCr: updatedTeam.purseRemainingCr.toNumber(),
+          purseRemainingCr: toNumber(updatedTeam.purseRemainingCr),
           playerCount: updatedTeam.playerCount,
           overseasCount: updatedTeam.overseasCount,
           rtmCardsUsed: updatedTeam.rtmCardsUsed,
@@ -793,7 +855,7 @@ export class AuctionGateway implements OnGatewayConnection, OnGatewayDisconnect 
         rtmTeam: rtmTeam ? {
           id: rtmTeam.id,
           teamName: rtmTeam.teamName,
-          purseRemainingCr: rtmTeam.purseRemainingCr.toNumber(),
+          purseRemainingCr: toNumber(rtmTeam.purseRemainingCr),
           playerCount: rtmTeam.playerCount,
           overseasCount: rtmTeam.overseasCount,
           rtmCardsUsed: rtmTeam.rtmCardsUsed,

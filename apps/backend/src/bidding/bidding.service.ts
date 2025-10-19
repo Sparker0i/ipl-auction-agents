@@ -15,6 +15,23 @@ const MIN_SQUAD_SIZE = 18;
 const MAX_SQUAD_SIZE = 25;
 const MAX_OVERSEAS = 8;
 
+/**
+ * Helper function to safely convert purseRemainingCr to number
+ * Handles both Prisma Decimal objects (from DB) and plain numbers (from cache)
+ */
+function toNumber(value: any): number {
+  if (typeof value === 'number') {
+    return value;
+  }
+  if (typeof value === 'string') {
+    return parseFloat(value);
+  }
+  if (value && typeof value.toNumber === 'function') {
+    return value.toNumber();
+  }
+  return Number(value);
+}
+
 @Injectable()
 export class BiddingService {
   constructor(
@@ -51,13 +68,23 @@ export class BiddingService {
     playerId: string,
     bidAmountLakh: number,
   ): Promise<{ valid: boolean; error?: string }> {
-    // Get auction state
-    const auction = await this.prisma.auction.findUnique({
-      where: { id: auctionId },
-      include: {
-        currentPlayer: true,
-      },
-    });
+    // Try to get auction from cache first
+    let auction = await this.redis.getCachedAuction(auctionId);
+
+    if (!auction) {
+      // Cache miss - fetch from database
+      auction = await this.prisma.auction.findUnique({
+        where: { id: auctionId },
+        include: {
+          currentPlayer: true,
+        },
+      });
+
+      // Cache for 30 seconds
+      if (auction) {
+        await this.redis.cacheAuction(auctionId, auction, 30);
+      }
+    }
 
     if (!auction) {
       return { valid: false, error: 'Auction not found' };
@@ -71,17 +98,27 @@ export class BiddingService {
       return { valid: false, error: 'Player is not currently being auctioned' };
     }
 
-    // Get team details
-    const team = await this.prisma.auctionTeam.findUnique({
-      where: { id: teamId },
-      include: {
-        players: {
-          include: {
-            player: true,
+    // Try to get team from cache first
+    let team = await this.redis.getCachedTeam(teamId);
+
+    if (!team) {
+      // Cache miss - fetch from database
+      team = await this.prisma.auctionTeam.findUnique({
+        where: { id: teamId },
+        include: {
+          players: {
+            include: {
+              player: true,
+            },
           },
         },
-      },
-    });
+      });
+
+      // Cache for 30 seconds
+      if (team) {
+        await this.redis.cacheTeam(teamId, team, 30);
+      }
+    }
 
     if (!team || team.auctionId !== auctionId) {
       return { valid: false, error: 'Invalid team for this auction' };
@@ -92,10 +129,20 @@ export class BiddingService {
       return { valid: false, error: 'Team has not joined the auction' };
     }
 
-    // Get player details
-    const player = await this.prisma.player.findUnique({
-      where: { id: playerId },
-    });
+    // Try to get player from cache (players change less frequently, so longer TTL)
+    let player = await this.redis.getCachedPlayer(playerId);
+
+    if (!player) {
+      // Cache miss - fetch from database
+      player = await this.prisma.player.findUnique({
+        where: { id: playerId },
+      });
+
+      // Cache for 5 minutes (players rarely change during auction)
+      if (player) {
+        await this.redis.cachePlayer(playerId, player, 300);
+      }
+    }
 
     if (!player) {
       return { valid: false, error: 'Player not found' };
@@ -124,10 +171,11 @@ export class BiddingService {
 
     // Check purse
     const bidCr = bidAmountLakh / 100;
-    if (team.purseRemainingCr.toNumber() < bidCr) {
+    const purseCr = toNumber(team.purseRemainingCr);
+    if (purseCr < bidCr) {
       return {
         valid: false,
-        error: `Insufficient purse. Available: ₹${team.purseRemainingCr.toNumber()}cr, Required: ₹${bidCr}cr`,
+        error: `Insufficient purse. Available: ₹${purseCr}cr, Required: ₹${bidCr}cr`,
       };
     }
 
@@ -196,6 +244,9 @@ export class BiddingService {
     // Update Redis state
     await this.redis.setAuctionState(auctionId, 'currentBidLakh', bidAmountLakh.toString());
     await this.redis.setAuctionState(auctionId, 'currentBiddingTeamId', teamId);
+
+    // Invalidate auction cache after update
+    await this.redis.invalidateAuctionCache(auctionId);
 
     console.log(`💰 Bid placed: ${updatedAuction.currentBiddingTeam?.teamName} - ₹${bidAmountLakh}L for ${updatedAuction.currentPlayer?.name}`);
 
@@ -292,6 +343,9 @@ export class BiddingService {
         },
       },
     });
+
+    // Invalidate team cache after purchase (purse changed)
+    await this.redis.invalidateTeamCache(auction.currentBiddingTeamId);
 
     console.log(`✅ SOLD: ${player.name} to ${auction.currentBiddingTeam?.teamName} for ₹${finalPriceCr}cr`);
 

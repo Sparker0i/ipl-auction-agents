@@ -137,6 +137,9 @@ export class PlayerProgressionService {
       },
     });
 
+    // Invalidate auction cache after loading new player
+    await this.redis.invalidateAuctionCache(auctionId);
+
     console.log(`🎯 Loaded player: ${player.name} (${set})`);
 
     return player;
@@ -312,6 +315,9 @@ export class PlayerProgressionService {
         currentBiddingTeamId: null,
       },
     });
+
+    // Invalidate auction cache after loading specific player
+    await this.redis.invalidateAuctionCache(auctionId);
 
     console.log(`🎯 Loaded specific player: ${player.name} (${player.auctionSet})`);
 

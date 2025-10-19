@@ -16,6 +16,23 @@ interface RTMState {
   expiresAt: number; // timestamp for counter-bid window
 }
 
+/**
+ * Helper function to safely convert purseRemainingCr to number
+ * Handles both Prisma Decimal objects (from DB) and plain numbers (from cache)
+ */
+function toNumber(value: any): number {
+  if (typeof value === 'number') {
+    return value;
+  }
+  if (typeof value === 'string') {
+    return parseFloat(value);
+  }
+  if (value && typeof value.toNumber === 'function') {
+    return value.toNumber();
+  }
+  return Number(value);
+}
+
 @Injectable()
 export class RTMService {
   constructor(
@@ -183,7 +200,7 @@ export class RTMService {
 
     // Validate purse sufficiency for matched bid
     const requiredPurseCr = rtmState.matchedBidLakh / 100;
-    if (rtmTeam.purseRemainingCr.toNumber() < requiredPurseCr) {
+    if (toNumber(rtmTeam.purseRemainingCr) < requiredPurseCr) {
       throw new BadRequestException('Insufficient purse to match bid');
     }
 
@@ -242,7 +259,7 @@ export class RTMService {
 
     // Validate purse sufficiency
     const requiredPurseCr = newBidLakh / 100;
-    if (team.purseRemainingCr.toNumber() < requiredPurseCr) {
+    if (toNumber(team.purseRemainingCr) < requiredPurseCr) {
       throw new BadRequestException('Insufficient purse for counter-bid');
     }
 
@@ -351,6 +368,9 @@ export class RTMService {
       },
     });
 
+    // Invalidate caches for updated entities
+    await this.redis.invalidateTeamCache(winningTeamId);
+
     // Get auction details for event metadata
     const auction = await this.prisma.auction.findUnique({
       where: { id: auctionId },
@@ -408,6 +428,9 @@ export class RTMService {
         rtmUncappedUsed: !isCapped ? team.rtmUncappedUsed + 1 : team.rtmUncappedUsed,
       },
     });
+
+    // Invalidate team cache after RTM card consumption
+    await this.redis.invalidateTeamCache(teamId);
 
     console.log(`🎴 RTM card consumed by ${team.teamName} (${isCapped ? 'Capped' : 'Uncapped'})`);
   }
