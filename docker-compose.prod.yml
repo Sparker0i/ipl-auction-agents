@@ -22,7 +22,7 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-change_me_in_production}
-      CORS_ORIGIN: http://localhost:8080
+      CORS_ORIGIN: http://localhost:9000
     # Remove dev command override
     command: ["node", "apps/backend/dist/main.js"]
 
@@ -36,5 +36,5 @@ services:
   nginx:
     restart: always
     ports:
-      - "8080:80"  # HTTP port (rootless compatible)
+      - "9000:80"  # HTTP port (rootless compatible)
       - "8443:443"  # HTTPS port mapped to 8443 for rootless compatibility

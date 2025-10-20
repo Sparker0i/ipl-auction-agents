@@ -43,7 +43,7 @@ services:
       REDIS_PORT: 6379
       NODE_ENV: development
       PORT: 4000
-      CORS_ORIGIN: http://localhost:8080
+      CORS_ORIGIN: http://localhost:9000
     ports:
       - "4000:4000"
     depends_on:
@@ -71,7 +71,7 @@ services:
     image: nginx:alpine
     container_name: ipl-nginx
     ports:
-      - "8080:80"  # Changed from 80 to 8080 for rootless Podman compatibility
+      - "9000:80"  # Changed from 80 to 9000 for rootless Podman compatibility
     volumes:
       - ./infrastructure/docker/nginx.conf:/etc/nginx/nginx.conf:ro,z  # :z for SELinux
     depends_on:

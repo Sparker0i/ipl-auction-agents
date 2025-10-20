@@ -18,14 +18,14 @@
   },
   "llm": {
     "provider": "ollama",
-    "baseUrl": "http://localhost:11434",
+    "baseUrl": "http://localhost:7869",
     "model": "llama3.1:8b",
     "temperature": 0.3,
     "timeout": 5000,
     "fallbackOnTimeout": true
   },
   "auction": {
-    "frontendUrl": "http://localhost:8080",
+    "frontendUrl": "http://localhost:9000",
     "bidDelayMs": 300,
     "stateCheckIntervalMs": 5000
   },
