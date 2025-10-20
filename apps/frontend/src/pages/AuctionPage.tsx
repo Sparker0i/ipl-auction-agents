@@ -214,6 +214,19 @@ export default function AuctionPage() {
     socketService.on('auction_started', (data: any) => {
       console.log('🎬 Auction started:', data);
 
+      // Update auction status to in_progress
+      if (data.status) {
+        dispatch(setAuction({
+          ...auctionState,
+          status: data.status,
+        }));
+      }
+
+      // Update current round if provided
+      if (data.currentRound) {
+        dispatch(setCurrentRound(data.currentRound));
+      }
+
       // If first player is included, process it
       if (data.firstPlayer) {
         dispatch(setCurrentPlayer(data.firstPlayer));

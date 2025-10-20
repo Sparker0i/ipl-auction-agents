@@ -311,6 +311,19 @@ async function main() {
   // Step 3: Initialize database
   console.log('💾 Step 3: Initializing database...');
 
+  // Initialize DatabasePool with a simple console logger
+  const { DatabasePool } = await import('../src/data/database-pool.js');
+  const winston = await import('winston');
+
+  const logger = winston.createLogger({
+    level: 'info',
+    format: winston.format.simple(),
+    transports: [new winston.transports.Console()],
+  });
+
+  const dbPool = DatabasePool.getInstance();
+  await dbPool.initialize(logger);
+
   const db = new PrismaDatabase();
   console.log('  ✅ Database initialized\n');
 
@@ -523,6 +536,9 @@ console.log(`\n  Data Coverage: ${coveragePercent}% of auction players\n`);
 
   // Close database
   await db.close();
+
+  // Disconnect DatabasePool
+  await dbPool.disconnect();
 
   console.log('✅ Data processing complete!\n');
   console.log('Database: PostgreSQL with Prisma');

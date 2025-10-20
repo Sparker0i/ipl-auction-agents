@@ -292,13 +292,14 @@ export class AuctionsService {
 
     console.log(`✅ User ${sessionId} joined as ${team.teamName}`);
 
-    // Broadcast team_joined event to all users in the auction room
+    // Broadcast team_joined event to all users in the auction room (includes both lobby and auction room members)
     const broadcastData = {
       teamId: team.id,
       teamName: team.teamName,
       ownerSessionId: sessionId,
     };
     console.log(`📡 Broadcasting team_joined to room auction:${auctionId}:`, broadcastData);
+    // Emit to the auction room - this covers users who have joined via WebSocket (both lobby and auction)
     this.auctionGateway.server.to(`auction:${auctionId}`).emit('team_joined', broadcastData);
     console.log(`📡 Broadcast complete`);
 

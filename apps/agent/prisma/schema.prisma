@@ -133,28 +133,26 @@ model AuctionEvent {
 }
 
 model PlayerStats {
-  id            String   @id @default(uuid())
-  playerId      String   @unique
-  battingStats  Json?    // BattingStats JSON
-  bowlingStats  Json?    // BowlingStats JSON
-  fieldingStats Json?    // FieldingStats JSON
-  lastUpdated   DateTime @default(now()) @updatedAt
+  playerId      String   @id @map("player_id")
+  battingStats  Json?    @map("batting_stats") // BattingStats JSON
+  bowlingStats  Json?    @map("bowling_stats") // BowlingStats JSON
+  fieldingStats Json?    @map("fielding_stats") // FieldingStats JSON
+  lastUpdated   DateTime @default(now()) @updatedAt @map("last_updated")
 
   // Relations
   player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
 
-  @@index([playerId])
   @@map("player_stats")
 }
 
 model Match {
   id        String   @id @default(uuid())
-  matchId   String   @unique
+  matchId   String   @unique @map("match_id")
   date      DateTime?
   venue     String?  @db.VarChar(100)
-  matchType String?  @db.VarChar(50)
+  matchType String?  @map("match_type") @db.VarChar(50)
   teams     Json?    // Array of team names
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @map("created_at")
 
   // Relations
   performances PlayerPerformance[]
@@ -166,13 +164,13 @@ model Match {
 
 model PlayerPerformance {
   id         String   @id @default(uuid())
-  playerId   String
-  matchId    String
-  playerName String   @db.VarChar(100) // Denormalized for easier queries
+  playerId   String   @map("player_id")
+  matchId    String   @map("match_id")
+  playerName String   @map("player_name") @db.VarChar(100) // Denormalized for easier queries
   batting    Json?    // Batting performance JSON
   bowling    Json?    // Bowling performance JSON
   fielding   Json?    // Fielding performance JSON
-  createdAt  DateTime @default(now())
+  createdAt  DateTime @default(now()) @map("created_at")
 
   // Relations
   player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)

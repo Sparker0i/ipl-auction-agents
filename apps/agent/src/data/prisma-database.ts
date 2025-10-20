@@ -267,8 +267,12 @@ export class PrismaDatabase {
     retentionCostCr: Prisma.Decimal;
     purseRemainingCr: Prisma.Decimal;
   } | null> {
-    const auction = await this.prisma.auction.findUnique({
-      where: { roomCode: auctionCode },
+    // auctionCode can be either a UUID (auction ID) or a 6-char room code
+    // Detect which one based on length: UUIDs are 36 chars, room codes are 6
+    const isUUID = auctionCode.length > 10;
+
+    const auction = await this.prisma.auction.findFirst({
+      where: isUUID ? { id: auctionCode } : { roomCode: auctionCode },
       include: {
         teams: {
           where: { teamName: teamCode },
