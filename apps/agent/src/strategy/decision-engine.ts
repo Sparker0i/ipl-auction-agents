@@ -76,7 +76,15 @@ export class DecisionEngine {
         this.strategy.homeVenue
       );
 
-      // 3. Build decision context
+      // 3. Calculate budget-safe max bid
+      const calculatedMaxBid = this.budgetManager.calculateMaxBid(
+        squadAnalysis.budgetRemaining,
+        squadAnalysis.currentSize,
+        player.basePrice,
+        playerQuality || undefined
+      );
+
+      // 4. Build decision context
       const context: BidContext = {
         player: {
           name: player.name,
@@ -92,17 +100,17 @@ export class DecisionEngine {
         quality: playerQuality || undefined,
       };
 
-      // 4. Try LLM decision
+      // 5. Try LLM decision with calculated maxBid guidance
       if (this.llmConfig.fallbackOnTimeout) {
         try {
-          const llmDecision = await this.getLLMDecision(context, playerStats || undefined);
+          const llmDecision = await this.getLLMDecision(context, playerStats || undefined, calculatedMaxBid);
           return this.processLLMDecision(llmDecision, context);
         } catch (error) {
           this.logger.warn('LLM decision failed, using fallback', { error });
           return this.getFallbackDecision(context);
         }
       } else {
-        const llmDecision = await this.getLLMDecision(context, playerStats || undefined);
+        const llmDecision = await this.getLLMDecision(context, playerStats || undefined, calculatedMaxBid);
         return this.processLLMDecision(llmDecision, context);
       }
     } catch (error) {
@@ -214,7 +222,8 @@ export class DecisionEngine {
    */
   private async getLLMDecision(
     context: BidContext,
-    playerStats?: any
+    playerStats?: any,
+    calculatedMaxBid?: number
   ): Promise<LLMDecision> {
     // Generate cache key based on player, price, phase, and budget
     const cacheKey = this.getCacheKey(
@@ -235,14 +244,15 @@ export class DecisionEngine {
       return cachedDecision;
     }
 
-    // Cache miss - query LLM
-    const prompt = this.promptBuilder.buildDecisionPrompt(context, playerStats);
+    // Cache miss - query LLM with calculated maxBid guidance
+    const prompt = this.promptBuilder.buildDecisionPrompt(context, playerStats, calculatedMaxBid);
 
     this.logger.debug('Queuing LLM request (cache miss)', {
       player: context.player.name,
       promptLength: prompt.length,
       teamCode: this.strategy.teamCode,
       cacheKey,
+      calculatedMaxBid: calculatedMaxBid ? (calculatedMaxBid / 100).toFixed(2) + ' cr' : 'N/A',
     });
 
     // Use shared LLM pool with queuing for fair resource allocation

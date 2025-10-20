@@ -10,7 +10,7 @@ export class PromptBuilder {
   /**
    * Build complete auction decision prompt
    */
-  buildDecisionPrompt(context: BidContext, playerStats?: PlayerStats): string {
+  buildDecisionPrompt(context: BidContext, playerStats?: PlayerStats, calculatedMaxBid?: number): string {
     const sections: string[] = [];
 
     // System role (cached - static)
@@ -27,6 +27,11 @@ export class PromptBuilder {
 
     // Squad needs (dynamic - not cached)
     sections.push(this.buildNeedsSection(context));
+
+    // Budget guidance with calculated maxBid (dynamic - not cached)
+    if (calculatedMaxBid !== undefined) {
+      sections.push(this.buildBudgetGuidanceSection(context, calculatedMaxBid));
+    }
 
     // Decision format (cached - static)
     sections.push(this.getCachedFormatSection());
@@ -225,16 +230,74 @@ Your goal is to build a competitive squad within budget constraints while follow
   }
 
   /**
+   * Build budget guidance section with calculated maxBid
+   */
+  private buildBudgetGuidanceSection(context: BidContext, calculatedMaxBid: number): string {
+    const { squad, strategy, player } = context;
+
+    const minSlotsNeeded = Math.max(0, 18 - squad.currentSize);
+    const reservedBudget = minSlotsNeeded * 30;
+    const availableBudget = squad.budgetRemaining - reservedBudget;
+    const calculatedMaxBidCr = calculatedMaxBid / 100;
+    const availableBudgetCr = availableBudget / 100;
+
+    // Determine player tier based on base price and status
+    let playerTier = 'Standard';
+    let bidGuidance = '';
+
+    if (player.basePrice >= 200) {
+      playerTier = 'MARQUEE/PREMIUM';
+      if (player.isCapped && player.isOverseas) {
+        bidGuidance = `International marquee players typically sell for 5-15x base price in competitive auctions. With your ${strategy.aggression} bidding strategy and ${(strategy.priorities.starPower * 100).toFixed(0)}% star power priority, you should bid aggressively.`;
+      } else if (player.isCapped) {
+        bidGuidance = `Top capped Indian players are highly valuable. Your ${(strategy.priorities.experience * 100).toFixed(0)}% experience priority suggests strong interest in proven performers.`;
+      }
+    } else if (player.basePrice >= 100) {
+      playerTier = 'Mid-tier';
+      bidGuidance = `Mid-tier players offer good value. Consider bidding 2-5x base price based on squad needs.`;
+    } else {
+      playerTier = 'Value pick';
+      bidGuidance = `Uncapped/low base price players can be acquired at or near base price. Focus on potential and value.`;
+    }
+
+    return `## BUDGET GUIDANCE & BIDDING STRATEGY
+
+**AVAILABLE BUDGET**: ₹${availableBudgetCr.toFixed(2)} cr (after ₹${(reservedBudget / 100).toFixed(2)} cr reserve)
+**CALCULATED MAX BID**: ₹${calculatedMaxBidCr.toFixed(2)} cr (based on your team strategy and budget analysis)
+
+**Player Tier**: ${playerTier}
+**Your Bidding Profile**: ${strategy.aggression.toUpperCase()} with ${(strategy.riskTolerance * 100).toFixed(0)}% risk tolerance
+
+${bidGuidance}
+
+**CRITICAL INSTRUCTIONS**:
+1. The calculated max bid of ₹${calculatedMaxBidCr.toFixed(2)} cr is your BUDGET-SAFE ceiling - you can bid up to this amount
+2. DO NOT be overly conservative - you have ₹${availableBudgetCr.toFixed(2)} cr available
+3. For ${strategy.aggression} teams: Bid competitively to secure quality players
+4. Phase: ${squad.phase.toUpperCase()} - ${squad.phase === 'early' ? 'This is the time to invest in core players' : squad.phase === 'mid' ? 'Fill key roles aggressively' : 'Be selective with remaining budget'}
+
+**Suggested Bid Range** (you can adjust based on player value):
+- Minimum: ₹${(player.basePrice / 100).toFixed(2)} cr (base price)
+- Target: ₹${Math.min(calculatedMaxBidCr * 0.7, calculatedMaxBidCr).toFixed(2)}-${calculatedMaxBidCr.toFixed(2)} cr
+- Maximum: ₹${calculatedMaxBidCr.toFixed(2)} cr (calculated safe limit)`;
+  }
+
+  /**
    * Build response format section
    */
   private buildFormatSection(): string {
     return `## Decision Required
 
-Based on your team strategy, squad needs, and this player's profile:
+Based on your team strategy, squad needs, player's profile, and BUDGET GUIDANCE above:
 
 1. Should you bid? (yes/no)
-2. If yes, what is your maximum bid (in ₹ crores)?
+2. If yes, what is your maximum bid (in ₹ crores)? Use the calculated max bid as your ceiling
 3. Brief reasoning (1-2 sentences)
+
+**IMPORTANT**:
+- Your maxBid should be a realistic competitive bid, NOT overly conservative
+- Use the calculated max bid from BUDGET GUIDANCE section as reference
+- For marquee players, bid aggressively within your calculated limit
 
 Respond in JSON format:
 {
@@ -247,8 +310,8 @@ Respond in JSON format:
   /**
    * Build fallback prompt (when stats unavailable)
    */
-  buildFallbackPrompt(context: BidContext): string {
-    return this.buildDecisionPrompt(context);
+  buildFallbackPrompt(context: BidContext, calculatedMaxBid?: number): string {
+    return this.buildDecisionPrompt(context, undefined, calculatedMaxBid);
   }
 
   /**

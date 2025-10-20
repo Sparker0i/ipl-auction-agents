@@ -995,7 +995,7 @@ export class AuctionAgent implements IAuctionAgent {
   /**
    * Handle RTM triggered event
    */
-  private handleRTMTriggered(rtmData: any): void {
+  private async handleRTMTriggered(rtmData: any): Promise<void> {
     try {
       this.logger.info('RTM triggered', {
         player: rtmData.playerName,
@@ -1004,17 +1004,97 @@ export class AuctionAgent implements IAuctionAgent {
         currentBid: rtmData.currentBidLakh,
       });
 
-      // Log RTM opportunity for this team
+      // Check if this is RTM opportunity for my team
       if (rtmData.rtmTeamId === this.teamId) {
         this.logger.info('RTM opportunity for my team', {
           player: rtmData.playerName,
-          decision: 'AI should decide whether to use RTM',
+          currentBid: rtmData.currentBidLakh,
         });
-        // TODO: Implement AI decision for RTM usage
-        // For now, agents will rely on manual RTM control
+
+        // Make AI decision for RTM usage
+        await this.makeRTMDecision(rtmData);
       }
     } catch (error) {
       this.logger.error('Error handling RTM triggered', { error });
+    }
+  }
+
+  /**
+   * Make AI decision whether to use RTM
+   */
+  private async makeRTMDecision(rtmData: any): Promise<void> {
+    try {
+      const page = this.browserController.getPage();
+
+      // Get current squad analysis
+      const squadAnalysis = await this.getSquadAnalysis();
+
+      const player: PlayerInAuction = {
+        id: rtmData.playerId,
+        name: rtmData.playerName,
+        role: rtmData.playerRole || 'UNKNOWN' as PlayerRole,
+        country: rtmData.playerCountry || 'Unknown',
+        basePrice: rtmData.basePriceLakh || 0,
+        isCapped: rtmData.isCapped !== false, // Default to capped
+        isOverseas: rtmData.isOverseas || false,
+      };
+
+      this.logger.info('Evaluating RTM decision', {
+        player: player.name,
+        currentBid: rtmData.currentBidLakh,
+        budget: squadAnalysis.budgetRemaining,
+      });
+
+      // Use decision engine to decide if we should use RTM
+      const decision = await this.decisionEngine!.makeDecision(player, squadAnalysis);
+
+      // Check if AI wants to bid and if the bid amount is worth using RTM
+      const shouldUseRTM = decision.shouldBid &&
+                          decision.maxBid &&
+                          decision.maxBid >= rtmData.currentBidLakh;
+
+      this.logger.info('RTM decision made', {
+        player: player.name,
+        shouldUseRTM,
+        aiMaxBid: decision.maxBid,
+        currentBid: rtmData.currentBidLakh,
+        reasoning: decision.reasoning,
+      });
+
+      if (shouldUseRTM) {
+        // Use RTM by calling backend via page evaluation
+        const auctionCode = this.config.auctionCode;
+        const teamId = this.teamId;
+
+        await page.evaluate(
+          ({ auctionCode, teamId }) => {
+            const win = window as any;
+            if (win.socketService && win.socketService.useRTM) {
+              win.socketService.useRTM(auctionCode, teamId);
+            } else {
+              console.error('Socket service not available for RTM');
+            }
+          },
+          { auctionCode, teamId }
+        );
+
+        this.logger.info('RTM used successfully', {
+          player: player.name,
+          matchedBid: rtmData.currentBidLakh,
+        });
+      } else {
+        this.logger.info('RTM declined by AI', {
+          player: player.name,
+          reason: !decision.shouldBid
+            ? 'AI decided not to bid on this player'
+            : 'Current bid exceeds AI max bid limit',
+        });
+      }
+    } catch (error) {
+      this.logger.error('Error making RTM decision', {
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
     }
   }
 

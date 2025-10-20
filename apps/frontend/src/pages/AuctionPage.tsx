@@ -771,7 +771,7 @@ export default function AuctionPage() {
 
   // Get current bid from Redux state ONLY (don't fallback to base price)
   const currentBid = currentBidState?.currentBidLakh ?? null;
-  const currentBiddingTeam = currentBidState?.biddingTeamId
+  const currentBiddingTeam = currentBidState?.biddingTeamId && teams
     ? teams.find(t => t.id === currentBidState.biddingTeamId)
     : null;
 

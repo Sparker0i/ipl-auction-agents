@@ -12,24 +12,27 @@ export const selectBidHistory = (state: RootState) => state.auction.bidHistory;
 export const selectRTMState = (state: RootState) => state.auction.rtmState;
 
 // Teams selectors
-export const selectAllTeams = (state: RootState) => state.teams.teams;
-export const selectMyTeamId = (state: RootState) => state.teams.myTeamId;
+export const selectAllTeams = (state: RootState) => state.teams?.teams || [];
+export const selectMyTeamId = (state: RootState) => state.teams?.myTeamId || null;
 
 export const selectMyTeam = (state: RootState) => {
-  const myTeamId = state.teams.myTeamId;
-  if (!myTeamId) return null;
+  const myTeamId = state.teams?.myTeamId;
+  if (!myTeamId || !state.teams?.teams) return null;
   return state.teams.teams.find((team: any) => team.id === myTeamId) || null;
 };
 
 export const selectTeamById = (teamId: string) => (state: RootState) => {
+  if (!state.teams?.teams) return null;
   return state.teams.teams.find((team: any) => team.id === teamId) || null;
 };
 
 export const selectAvailableTeams = (state: RootState) => {
+  if (!state.teams?.teams) return [];
   return state.teams.teams.filter((team: any) => !team.ownerSessionId);
 };
 
 export const selectTeamsSortedByPurse = (state: RootState) => {
+  if (!state.teams?.teams) return [];
   return [...state.teams.teams].sort((a, b) => b.purseRemainingCr - a.purseRemainingCr);
 };
 
