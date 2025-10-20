@@ -1,29 +1,73 @@
 import { PrismaDatabase } from './prisma-database.js';
+import { StatsCache } from './stats-cache.js';
 import { PlayerStats } from '../types/player.types.js';
 import { PlayerQuality } from '../types/strategy.types.js';
 
 /**
  * Player statistics query engine
+ * Uses shared cache to reduce database queries
  */
 export class StatsEngine {
   private db: PrismaDatabase;
+  private cache: StatsCache;
 
   constructor(db: PrismaDatabase) {
     this.db = db;
+    this.cache = StatsCache.getInstance();
   }
 
   /**
-   * Get player statistics by name
+   * Get player statistics by name (with caching)
    */
   async getPlayerStats(playerName: string): Promise<PlayerStats | null> {
-    return await this.db.getPlayerStats(playerName);
+    return await this.cache.getPlayerStats(playerName, async () => {
+      return await this.db.getPlayerStats(playerName);
+    });
   }
 
   /**
-   * Get player statistics by ID
+   * Get player statistics by ID (with caching)
    */
   async getPlayerStatsById(playerId: string): Promise<PlayerStats | null> {
-    return await this.db.getPlayerStatsByPlayerId(playerId);
+    return await this.cache.getPlayerStatsById(playerId, async () => {
+      return await this.db.getPlayerStats(playerId);
+    });
+  }
+
+  /**
+   * Batch get player stats (optimized for multiple players)
+   */
+  async getBatchPlayerStats(playerIds: string[]): Promise<Map<string, PlayerStats>> {
+    if (playerIds.length === 0) {
+      return new Map();
+    }
+
+    // Check cache first for all players
+    const results = new Map<string, PlayerStats>();
+    const missingPlayers: string[] = [];
+
+    for (const playerId of playerIds) {
+      const cached = await this.cache.getPlayerStatsById(playerId, async () => null);
+      if (cached) {
+        results.set(playerId, cached);
+      } else {
+        missingPlayers.push(playerId);
+      }
+    }
+
+    // Batch fetch missing players from database
+    if (missingPlayers.length > 0) {
+      const batchStats = await this.db.getBatchPlayerStats(missingPlayers);
+
+      // Add to cache and results
+      for (const [playerId, stats] of batchStats) {
+        results.set(playerId, stats);
+        // Warm cache for future single queries
+        await this.cache.getPlayerStatsById(playerId, async () => stats);
+      }
+    }
+
+    return results;
   }
 
   /**

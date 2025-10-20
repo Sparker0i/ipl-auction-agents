@@ -1,17 +1,22 @@
 /**
  * Prisma Database Manager for PostgreSQL
+ * Uses shared DatabasePool singleton to reduce connection overhead
  */
 
 import { PrismaClient, Prisma } from '@prisma/client';
 import { Player, PlayerStats, PlayerPerformance, MatchData } from '../types/player.types.js';
+import { DatabasePool } from './database-pool.js';
 
 export class PrismaDatabase {
   private prisma: PrismaClient;
 
   constructor() {
-    this.prisma = new PrismaClient({
-      log: ['error', 'warn'],
-    });
+    // Use shared database pool instead of creating new connection
+    const dbPool = DatabasePool.getInstance();
+    if (!dbPool.isInitialized()) {
+      throw new Error('DatabasePool not initialized. Initialize it in orchestrator first.');
+    }
+    this.prisma = dbPool.getClient();
   }
 
   // Player operations
@@ -182,6 +187,31 @@ export class PrismaDatabase {
     };
   }
 
+  /**
+   * Batch query for multiple player stats (more efficient than individual queries)
+   */
+  async getBatchPlayerStats(playerIds: string[]): Promise<Map<string, PlayerStats>> {
+    const statsRecords = await this.prisma.playerStats.findMany({
+      where: {
+        playerId: { in: playerIds }
+      },
+    });
+
+    const statsMap = new Map<string, PlayerStats>();
+
+    for (const stats of statsRecords) {
+      statsMap.set(stats.playerId, {
+        playerId: stats.playerId,
+        batting: stats.battingStats as any,
+        bowling: stats.bowlingStats as any,
+        fielding: stats.fieldingStats as any,
+        lastUpdated: stats.lastUpdated,
+      });
+    }
+
+    return statsMap;
+  }
+
   // Query operations
   async getPlayerPerformances(playerId: string): Promise<PlayerPerformance[]> {
     const performances = await this.prisma.playerPerformance.findMany({
@@ -231,7 +261,35 @@ export class PrismaDatabase {
     };
   }
 
+  // Auction team operations
+  async getTeamBudget(auctionCode: string, teamCode: string): Promise<{
+    basePurseCr: Prisma.Decimal;
+    retentionCostCr: Prisma.Decimal;
+    purseRemainingCr: Prisma.Decimal;
+  } | null> {
+    const auction = await this.prisma.auction.findUnique({
+      where: { roomCode: auctionCode },
+      include: {
+        teams: {
+          where: { teamName: teamCode },
+          select: {
+            basePurseCr: true,
+            retentionCostCr: true,
+            purseRemainingCr: true,
+          },
+        },
+      },
+    });
+
+    if (!auction || auction.teams.length === 0) {
+      return null;
+    }
+
+    return auction.teams[0];
+  }
+
   async close() {
-    await this.prisma.$disconnect();
+    // Don't disconnect - shared pool is managed by orchestrator
+    // Pool will be disconnected during orchestrator shutdown
   }
 }

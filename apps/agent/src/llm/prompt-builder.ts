@@ -2,34 +2,75 @@ import { BidContext } from '../types/strategy.types.js';
 import { PlayerStats } from '../types/player.types.js';
 
 /**
- * Build LLM prompt for bid decisions
+ * Build LLM prompt for bid decisions with template caching
  */
 export class PromptBuilder {
+  private templateCache: Map<string, string> = new Map();
+
   /**
    * Build complete auction decision prompt
    */
   buildDecisionPrompt(context: BidContext, playerStats?: PlayerStats): string {
     const sections: string[] = [];
 
-    // System role
-    sections.push(this.buildSystemSection(context));
+    // System role (cached - static)
+    sections.push(this.getCachedSystemSection(context));
 
-    // Team profile
-    sections.push(this.buildTeamSection(context));
+    // Team profile (cached per team)
+    sections.push(this.getCachedTeamSection(context));
 
-    // Current squad status
+    // Current squad status (dynamic - not cached)
     sections.push(this.buildSquadSection(context));
 
-    // Player information
+    // Player information (dynamic - not cached)
     sections.push(this.buildPlayerSection(context, playerStats));
 
-    // Squad needs
+    // Squad needs (dynamic - not cached)
     sections.push(this.buildNeedsSection(context));
 
-    // Decision format
-    sections.push(this.buildFormatSection());
+    // Decision format (cached - static)
+    sections.push(this.getCachedFormatSection());
 
     return sections.join('\n\n');
+  }
+
+  /**
+   * Get cached system section
+   */
+  private getCachedSystemSection(context: BidContext): string {
+    const cacheKey = `system_${context.strategy.teamName}`;
+
+    if (!this.templateCache.has(cacheKey)) {
+      this.templateCache.set(cacheKey, this.buildSystemSection(context));
+    }
+
+    return this.templateCache.get(cacheKey)!;
+  }
+
+  /**
+   * Get cached team section
+   */
+  private getCachedTeamSection(context: BidContext): string {
+    const cacheKey = `team_${context.strategy.teamCode}`;
+
+    if (!this.templateCache.has(cacheKey)) {
+      this.templateCache.set(cacheKey, this.buildTeamSection(context));
+    }
+
+    return this.templateCache.get(cacheKey)!;
+  }
+
+  /**
+   * Get cached format section
+   */
+  private getCachedFormatSection(): string {
+    const cacheKey = 'format';
+
+    if (!this.templateCache.has(cacheKey)) {
+      this.templateCache.set(cacheKey, this.buildFormatSection());
+    }
+
+    return this.templateCache.get(cacheKey)!;
   }
 
   /**

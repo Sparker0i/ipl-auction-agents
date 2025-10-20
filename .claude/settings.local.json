@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(timeout 300 pnpm run process-data)",
+      "Bash(timeout 180 pnpm run process-data)",
+      "Bash(timeout 600 pnpm run process-data)",
+      "Bash(pnpm --filter backend build)",
+      "Bash(pnpm --filter backend lint)",
+      "Bash(npx tsc --noEmit)",
+      "Bash(npx tsc --noEmit --project apps/backend/tsconfig.json)",
+      "Bash(npm run build)",
+      "Bash(npm run build -- --noEmitOnError false)",
+      "Bash(pnpm run build)",
+      "Bash(docker ps --format \"table {{.Names}}\\t{{.Status}}\")",
+      "Bash(docker restart ipl-frontend)",
+      "Bash(docker logs ipl-frontend)",
+      "Bash(docker ps --filter \"name=frontend\" --format \"{{.ID}}\")",
+      "Bash(docker logs da4edf68b9fe)",
+      "Bash(docker-compose build frontend)",
+      "Bash(docker-compose up -d frontend)",
+      "Bash(docker exec ipl-frontend grep -A 5 \"player_sold.*data.*any\" /app/apps/frontend/src/pages/AuctionPage.tsx)",
+      "Bash(docker exec ipl-frontend grep -A 70 \"player_sold.*data.*any\" /app/apps/frontend/src/pages/AuctionPage.tsx)",
+      "Bash(docker logs ipl-backend)",
+      "Bash(npx tsc --noEmit --project apps/agent/tsconfig.json)",
+      "Bash(docker ps --filter \"name=frontend\" --format \"{{.ID}}\\t{{.Names}}\\t{{.Status}}\")"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

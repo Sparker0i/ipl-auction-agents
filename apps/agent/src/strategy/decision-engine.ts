@@ -10,8 +10,16 @@ import { PromptBuilder } from '../llm/prompt-builder.js';
 import type { Logger } from 'winston';
 
 /**
+ * Cached decision result
+ */
+interface CachedDecision {
+  decision: LLMDecision;
+  timestamp: number;
+}
+
+/**
  * Main decision engine integrating all strategy components
- * Uses shared LLM pool for resource efficiency
+ * Uses shared LLM pool for resource efficiency and decision caching
  */
 export class DecisionEngine {
   private strategy: TeamStrategy;
@@ -23,6 +31,9 @@ export class DecisionEngine {
   private promptBuilder: PromptBuilder;
   private logger: Logger;
   private llmConfig: LLMConfig;
+  private decisionCache: Map<string, CachedDecision> = new Map();
+  private readonly DECISION_CACHE_TTL = 30000; // 30 seconds
+  private promptTemplateCache: Map<string, string> = new Map(); // Template caching
 
   constructor(
     strategy: TeamStrategy,
@@ -144,45 +155,132 @@ export class DecisionEngine {
   }
 
   /**
-   * Get LLM decision (uses shared pool)
+   * Generate cache key for decision caching
+   * Price-aware: different prices create different cache keys
+   */
+  private getCacheKey(
+    playerId: string,
+    currentBid: number,
+    phase: string,
+    hasBudget: boolean
+  ): string {
+    // Price bracket in 50L increments (e.g., 30L and 40L are same bracket, 80L and 90L are same)
+    const priceBracket = Math.floor(currentBid / 50);
+    return `${playerId}_${priceBracket}_${phase}_${hasBudget}`;
+  }
+
+  /**
+   * Get cached decision if available and not expired
+   */
+  private getCachedDecision(cacheKey: string): LLMDecision | null {
+    const cached = this.decisionCache.get(cacheKey);
+    if (!cached) {
+      return null;
+    }
+
+    // Check if cache expired (30 seconds TTL)
+    if (Date.now() - cached.timestamp > this.DECISION_CACHE_TTL) {
+      this.decisionCache.delete(cacheKey);
+      this.logger.debug('Decision cache expired', { cacheKey });
+      return null;
+    }
+
+    this.logger.debug('Decision cache hit', { cacheKey });
+    return cached.decision;
+  }
+
+  /**
+   * Store decision in cache
+   */
+  private cacheDecision(cacheKey: string, decision: LLMDecision): void {
+    this.decisionCache.set(cacheKey, {
+      decision,
+      timestamp: Date.now(),
+    });
+
+    // Cleanup old entries to prevent memory leak
+    if (this.decisionCache.size > 100) {
+      const oldestKey = this.decisionCache.keys().next().value;
+      if (oldestKey) {
+        this.decisionCache.delete(oldestKey);
+      }
+    }
+
+    this.logger.debug('Decision cached', { cacheKey, cacheSize: this.decisionCache.size });
+  }
+
+  /**
+   * Get LLM decision (uses shared pool with queuing and caching)
    */
   private async getLLMDecision(
     context: BidContext,
     playerStats?: any
   ): Promise<LLMDecision> {
-    // Add small random delay to prevent all agents hitting LLM simultaneously
-    const delay = Math.floor(Math.random() * 500); // 0-500ms random delay
-    await new Promise(resolve => setTimeout(resolve, delay));
+    // Generate cache key based on player, price, phase, and budget
+    const cacheKey = this.getCacheKey(
+      context.player.name, // Use player name as ID
+      context.player.currentBid,
+      context.squad.phase,
+      context.squad.budgetRemaining > 1000
+    );
 
-    const prompt = this.promptBuilder.buildDecisionPrompt(context, playerStats);
-
-    this.logger.debug('Querying LLM for decision', {
-      player: context.player.name,
-      promptLength: prompt.length,
-      delay,
-    });
-
-    // Use shared LLM client from pool if available
-    let client = this.ollamaClient;
-    try {
-      const poolClient = this.llmPool.getClient();
-      if (poolClient) {
-        client = poolClient;
-      }
-    } catch (error) {
-      // Pool not initialized, use fallback client
-      this.logger.debug('Using fallback LLM client');
+    // Check cache first
+    const cachedDecision = this.getCachedDecision(cacheKey);
+    if (cachedDecision) {
+      this.logger.info('Using cached decision', {
+        player: context.player.name,
+        decision: cachedDecision.decision,
+        maxBid: cachedDecision.maxBid,
+      });
+      return cachedDecision;
     }
 
-    const decision = await client.queryDecision(prompt);
+    // Cache miss - query LLM
+    const prompt = this.promptBuilder.buildDecisionPrompt(context, playerStats);
 
-    this.logger.info('LLM decision received', {
+    this.logger.debug('Queuing LLM request (cache miss)', {
       player: context.player.name,
-      decision: decision.decision,
-      maxBid: decision.maxBid,
+      promptLength: prompt.length,
+      teamCode: this.strategy.teamCode,
+      cacheKey,
     });
 
-    return decision;
+    // Use shared LLM pool with queuing for fair resource allocation
+    try {
+      const decision = await this.llmPool.queueRequest(
+        this.strategy.teamCode,
+        async () => {
+          const client = this.llmPool.getClient();
+          return await client.queryDecision(prompt);
+        }
+      );
+
+      this.logger.info('LLM decision received', {
+        player: context.player.name,
+        decision: decision.decision,
+        maxBid: decision.maxBid,
+      });
+
+      // Cache the decision
+      this.cacheDecision(cacheKey, decision);
+
+      return decision;
+    } catch (error) {
+      // Pool error - fall back to direct client
+      this.logger.warn('LLM pool error, using fallback client', { error });
+      const decision = await this.ollamaClient.queryDecision(prompt);
+
+      this.logger.info('LLM decision received (fallback)', {
+        player: context.player.name,
+        decision: decision.decision,
+        maxBid: decision.maxBid,
+      });
+
+      // Cache the fallback decision too
+      this.cacheDecision(cacheKey, decision);
+
+      return decision;
+    }
   }
 
   /**
@@ -205,6 +303,36 @@ export class DecisionEngine {
     // Convert from crores to lakhs if needed (LLM might return in crores)
     if (maxBid < 1000) {
       maxBid = maxBid * 100; // Convert cr to lakhs
+    }
+
+    // CRITICAL: Calculate available budget with reserves (same logic as fallback)
+    const minSlotsNeeded = Math.max(0, 18 - context.squad.currentSize);
+    const reservedBudget = minSlotsNeeded * 30; // 30L per remaining mandatory slot
+    const availableBudget = context.squad.budgetRemaining - reservedBudget;
+
+    this.logger.info('LLM decision budget validation', {
+      player: context.player.name,
+      llmMaxBid: maxBid,
+      budgetRemaining: context.squad.budgetRemaining,
+      reservedBudget,
+      availableBudget,
+      currentBid: context.player.currentBid,
+    });
+
+    // Check if we have any available budget
+    if (availableBudget <= 0) {
+      return {
+        shouldBid: false,
+        reasoning: `Cannot afford (need ₹${(reservedBudget / 100).toFixed(2)}cr reserve for ${minSlotsNeeded} slots)`,
+      };
+    }
+
+    // Check if current bid is already beyond our available budget
+    if (context.player.currentBid > availableBudget) {
+      return {
+        shouldBid: false,
+        reasoning: `Current bid ₹${(context.player.currentBid / 100).toFixed(2)}cr exceeds available budget ₹${(availableBudget / 100).toFixed(2)}cr`,
+      };
     }
 
     // Apply budget constraints
@@ -233,10 +361,21 @@ export class DecisionEngine {
       maxBid = affordable;
     }
 
+    // CRITICAL: Cap maxBid to available budget (accounting for reserves)
+    maxBid = Math.min(maxBid, availableBudget);
+
     // Ensure not exceeding team maximum
     const teamMaxInLakhs = this.strategy.specialRules.maxBidPerPlayer * 100;
     if (maxBid > teamMaxInLakhs) {
       maxBid = teamMaxInLakhs;
+    }
+
+    // Final check: is the capped maxBid below current bid?
+    if (maxBid < context.player.currentBid) {
+      return {
+        shouldBid: false,
+        reasoning: `Current bid ₹${(context.player.currentBid / 100).toFixed(2)}cr exceeds our affordable max ₹${(maxBid / 100).toFixed(2)}cr`,
+      };
     }
 
     return {
@@ -258,13 +397,41 @@ export class DecisionEngine {
     const roleNeeded = this.squadOptimizer.isRoleNeeded(player.role, squad);
     const rolePriority = this.squadOptimizer.getRolePriority(player.role, squad);
 
-    // Calculate max bid using budget manager
+    // Calculate max bid using budget manager with CURRENT squad budget
     const maxBid = this.budgetManager.calculateMaxBid(
       squad.budgetRemaining,
       squad.currentSize,
       player.basePrice,
       quality
     );
+
+    this.logger.info('Fallback decision calculation', {
+      player: player.name,
+      budgetRemaining: squad.budgetRemaining,
+      squadSize: squad.currentSize,
+      calculatedMaxBid: maxBid,
+      currentBid: player.currentBid,
+    });
+
+    // CRITICAL: Safety check - ensure we have minimum reserve budget
+    const minSlotsNeeded = Math.max(0, 18 - squad.currentSize);
+    const reservedBudget = minSlotsNeeded * 30; // 30L per remaining mandatory slot
+    const availableBudget = squad.budgetRemaining - reservedBudget;
+
+    if (availableBudget <= 0) {
+      return {
+        shouldBid: false,
+        reasoning: `Fallback: Insufficient budget (need ₹${(reservedBudget / 100).toFixed(2)}cr reserve for ${minSlotsNeeded} slots)`,
+      };
+    }
+
+    // Check if we can actually afford the current bid
+    if (player.currentBid > availableBudget) {
+      return {
+        shouldBid: false,
+        reasoning: `Fallback: Cannot afford current bid ₹${(player.currentBid / 100).toFixed(2)}cr (available: ₹${(availableBudget / 100).toFixed(2)}cr)`,
+      };
+    }
 
     // Decision logic
     if (!roleNeeded && squad.phase === 'late') {
@@ -281,12 +448,23 @@ export class DecisionEngine {
       };
     }
 
+    // CRITICAL: Cap maxBid to available budget (accounting for reserves)
+    const cappedMaxBid = Math.min(maxBid, availableBudget);
+
+    // Check if capped maxBid is below current bid
+    if (cappedMaxBid < player.currentBid) {
+      return {
+        shouldBid: false,
+        reasoning: `Fallback: Current bid ₹${(player.currentBid / 100).toFixed(2)}cr exceeds affordable max ₹${(cappedMaxBid / 100).toFixed(2)}cr`,
+      };
+    }
+
     // Bid if role is needed and affordable
     if (roleNeeded || rolePriority > 0) {
       return {
         shouldBid: true,
-        maxBid: Math.floor(maxBid),
-        reasoning: `Fallback: Role needed (priority ${rolePriority}), max bid ₹${(maxBid / 100).toFixed(2)}cr`,
+        maxBid: Math.floor(cappedMaxBid),
+        reasoning: `Fallback: Role needed (priority ${rolePriority}), max bid ₹${(cappedMaxBid / 100).toFixed(2)}cr (budget: ₹${(squad.budgetRemaining / 100).toFixed(2)}cr, reserve: ₹${(reservedBudget / 100).toFixed(2)}cr)`,
       };
     }
 
@@ -298,11 +476,12 @@ export class DecisionEngine {
       };
     }
 
-    // Default: small bid for value
+    // Default: small bid for value, but still capped to available budget
+    const valueBid = Math.min(player.basePrice * 1.2, cappedMaxBid);
     return {
       shouldBid: true,
-      maxBid: Math.floor(player.basePrice * 1.2),
-      reasoning: 'Fallback: Value bid at base price + 20%',
+      maxBid: Math.floor(valueBid),
+      reasoning: `Fallback: Value bid ₹${(valueBid / 100).toFixed(2)}cr (available: ₹${(availableBudget / 100).toFixed(2)}cr)`,
     };
   }
 

@@ -10,6 +10,8 @@ import { AgentSpawner } from './agent-spawner.js';
 import { HealthMonitor } from './health-monitor.js';
 import { LogAggregator } from './log-aggregator.js';
 import { PerformanceProfiler } from '../monitoring/performance-profiler.js';
+import { StatsCache } from '../data/stats-cache.js';
+import { DatabasePool } from '../data/database-pool.js';
 import { createLogger } from '../utils/logger.js';
 import { loadConfig } from '../utils/config.js';
 import type { TeamCode } from '../types/agent.types.js';
@@ -69,7 +71,8 @@ export class Orchestrator extends EventEmitter {
    * Get available teams (teams not yet joined by any user)
    */
   private async getAvailableTeams(): Promise<TeamCode[]> {
-    const prisma = new PrismaClient();
+    const dbPool = DatabasePool.getInstance();
+    const prisma = dbPool.getClient();
 
     try {
       // Find the auction by ID or roomCode
@@ -106,9 +109,11 @@ export class Orchestrator extends EventEmitter {
       });
 
       return availableTeams;
-    } finally {
-      await prisma.$disconnect();
+    } catch (error) {
+      this.logger.error('Failed to get available teams', { error });
+      throw error;
     }
+    // Note: Don't disconnect - pool is managed centrally
   }
 
   /**
@@ -124,6 +129,16 @@ export class Orchestrator extends EventEmitter {
     this.logger.info(`Starting orchestrator for auction: ${this.auctionCode}`);
 
     try {
+      // Initialize shared database pool
+      const dbPool = DatabasePool.getInstance();
+      await dbPool.initialize(this.logger);
+      this.logger.info('Database pool initialized');
+
+      // Initialize shared stats cache
+      const statsCache = StatsCache.getInstance();
+      statsCache.initialize(this.logger);
+      this.logger.info('Stats cache initialized');
+
       // Get available teams from database
       const availableTeams = await this.getAvailableTeams();
 
@@ -206,6 +221,11 @@ export class Orchestrator extends EventEmitter {
 
       // Stop log aggregation
       await this.logAggregator.stop();
+
+      // Disconnect database pool
+      const dbPool = DatabasePool.getInstance();
+      await dbPool.disconnect();
+      this.logger.info('Database pool disconnected');
 
       // Generate final reports
       await this.generateFinalReports();

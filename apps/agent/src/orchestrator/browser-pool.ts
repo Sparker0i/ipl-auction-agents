@@ -95,11 +95,9 @@ export class BrowserPool {
       });
 
       // Disable unnecessary features to save resources
+      // Block image loading to save bandwidth and memory
       await context.route('**/*.{png,jpg,jpeg,gif,svg,webp,ico}', route => {
-        // Block image loading to save bandwidth and memory (optional)
-        // Uncomment if images aren't needed for automation
-        // route.abort();
-        route.continue();
+        route.abort();
       });
 
       this.contexts.set(agentId, context);

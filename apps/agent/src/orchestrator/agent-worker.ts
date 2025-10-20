@@ -9,6 +9,8 @@ import { getTeamStrategy } from '../strategy/team-strategies.js';
 import { DecisionEngine } from '../strategy/decision-engine.js';
 import { StatsEngine } from '../data/stats-engine.js';
 import { PrismaDatabase } from '../data/prisma-database.js';
+import { DatabasePool } from '../data/database-pool.js';
+import { StatsCache } from '../data/stats-cache.js';
 import { loadConfig } from '../utils/config.js';
 import { createLogger } from '../utils/logger.js';
 import { TeamCode, AgentConfig } from '../types/agent.types.js';
@@ -68,12 +70,37 @@ async function main() {
   logger.info('Agent worker starting', { teamCode, auctionCode });
 
   try {
+    // Initialize database pool for this worker process
+    // Note: Each agent worker is a separate process, so each has its own pool instance
+    // The singleton ensures only one connection per worker process
+    const dbPool = DatabasePool.getInstance();
+    await dbPool.initialize(logger);
+    logger.info('Database pool initialized in worker process');
+
+    // Initialize stats cache for this worker process
+    const statsCache = StatsCache.getInstance();
+    statsCache.initialize(logger);
+    logger.info('Stats cache initialized in worker process');
+
     // Get team strategy
     const strategy = getTeamStrategy(teamCode);
 
     // Initialize database and stats engine
     const db = new PrismaDatabase();
     const statsEngine = new StatsEngine(db);
+
+    // CRITICAL: Fetch team's actual budget from database
+    logger.info('Fetching team budget from database', { teamCode, auctionCode });
+    const teamBudget = await db.getTeamBudget(auctionCode, teamCode);
+    if (!teamBudget) {
+      throw new Error(`Team budget not found for ${teamCode} in auction ${auctionCode}`);
+    }
+    logger.info('Team budget fetched', {
+      teamCode,
+      basePurseCr: teamBudget.basePurseCr,
+      retentionCostCr: teamBudget.retentionCostCr,
+      purseRemainingCr: teamBudget.purseRemainingCr,
+    });
 
     // Create decision engine
     const decisionEngine = new DecisionEngine(
@@ -95,6 +122,7 @@ async function main() {
       frontendUrl: config.auction.frontendUrl,
       bidDelayMs: config.auction.bidDelayMs,
       stateCheckIntervalMs: config.auction.stateCheckIntervalMs,
+      initialBudgetLakh: Math.floor(Number(teamBudget.purseRemainingCr) * 100), // Convert cr to lakhs
     };
 
     // Create and initialize agent with AI decision engine
@@ -143,6 +171,15 @@ async function shutdown() {
     } catch (error) {
       console.error('Error during cleanup', error);
     }
+  }
+
+  // Disconnect database pool
+  try {
+    const dbPool = DatabasePool.getInstance();
+    await dbPool.disconnect();
+    console.log('Database pool disconnected in worker');
+  } catch (error) {
+    console.error('Error disconnecting database pool', error);
   }
 
   process.exit(0);

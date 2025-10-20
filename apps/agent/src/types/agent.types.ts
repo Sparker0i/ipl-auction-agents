@@ -120,6 +120,7 @@ export interface AgentConfig {
   frontendUrl: string;
   bidDelayMs: number;
   stateCheckIntervalMs: number;
+  initialBudgetLakh?: number; // Team's actual budget in lakhs (fetched from database)
 }
 
 /**

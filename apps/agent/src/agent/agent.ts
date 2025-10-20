@@ -30,6 +30,9 @@ export class AuctionAgent implements IAuctionAgent {
   private stateCheckInterval: NodeJS.Timeout | null = null;
   private currentPlayerId: string | null = null; // Track current player to prevent duplicate processing
   private processingPlayer: boolean = false; // Lock to prevent concurrent processing
+  private squadAnalysisCache: { key: string; result: SquadAnalysis } | null = null; // Memoization cache
+  private currentSyncInterval: number; // Dynamic sync interval
+  private isActiveBidding: boolean = false; // Track if actively bidding
 
   constructor(
     config: AgentConfig,
@@ -41,9 +44,18 @@ export class AuctionAgent implements IAuctionAgent {
     this.logger = logger;
     // Pass teamCode as agentId for browser pooling
     this.browserController = new BrowserController(config.browser, logger, config.teamCode);
-    this.stateManager = new StateManager(12000, logger); // Start with 120cr = 12000 lakhs
+    // CRITICAL: Use team-specific budget from database, fallback to default 120cr only if not provided
+    const initialBudget = config.initialBudgetLakh ?? 12000;
+    this.logger.info('Agent budget initialized', {
+      teamCode: config.teamCode,
+      initialBudgetLakh: initialBudget,
+      initialBudgetCr: (initialBudget / 100).toFixed(2),
+      source: config.initialBudgetLakh ? 'database' : 'default',
+    });
+    this.stateManager = new StateManager(initialBudget, logger);
     this.decisionEngine = decisionEngine || null;
     this.strategy = strategy || null;
+    this.currentSyncInterval = config.stateCheckIntervalMs; // Start with config default
   }
 
   /**
@@ -324,21 +336,64 @@ export class AuctionAgent implements IAuctionAgent {
   }
 
   /**
-   * Start periodic state synchronization
+   * Start periodic state synchronization with dynamic intervals
    */
   private startPeriodicStateSync(): void {
     this.stateCheckInterval = setInterval(async () => {
       try {
         const page = this.browserController.getPage();
         await this.stateManager.syncState(page);
+
+        // Adjust sync interval based on auction activity
+        this.adjustSyncInterval();
       } catch (error) {
         this.logger.error('State sync failed', { error });
       }
-    }, this.config.stateCheckIntervalMs);
+    }, this.currentSyncInterval);
 
     this.logger.debug('Periodic state sync started', {
-      intervalMs: this.config.stateCheckIntervalMs,
+      intervalMs: this.currentSyncInterval,
     });
+  }
+
+  /**
+   * Dynamically adjust state sync interval based on auction activity
+   */
+  private adjustSyncInterval(): void {
+    const currentPlayer = this.stateManager.getCurrentPlayer();
+
+    // Determine if we're in active bidding phase
+    const hasActivePlayer = currentPlayer !== null;
+    const wasActiveBidding = this.isActiveBidding;
+    this.isActiveBidding = hasActivePlayer;
+
+    // Calculate optimal interval
+    let optimalInterval: number;
+
+    if (hasActivePlayer) {
+      // Active bidding: fast sync (500ms)
+      optimalInterval = 500;
+    } else {
+      // Waiting for next player: slower sync (2000ms)
+      optimalInterval = 2000;
+    }
+
+    // Only restart timer if interval changed significantly (>500ms difference)
+    if (Math.abs(optimalInterval - this.currentSyncInterval) > 500) {
+      this.currentSyncInterval = optimalInterval;
+
+      // Restart the interval with new timing
+      if (this.stateCheckInterval) {
+        clearInterval(this.stateCheckInterval);
+        this.startPeriodicStateSync();
+
+        this.logger.debug('State sync interval adjusted', {
+          oldInterval: wasActiveBidding ? 500 : 2000,
+          newInterval: optimalInterval,
+          hasActivePlayer,
+        });
+      }
+    }
   }
 
   /**
@@ -556,6 +611,14 @@ export class AuctionAgent implements IAuctionAgent {
 
         this.stateManager.addPlayer(player);
 
+        // CRITICAL: Invalidate squad analysis cache when we acquire a player
+        // This ensures fresh budget calculations for next player
+        this.squadAnalysisCache = null;
+        this.logger.info('Squad analysis cache invalidated after player acquisition', {
+          player: player.name,
+          price: player.price,
+        });
+
         this.logger.info('Won player', {
           player: player.name,
           price: player.price,
@@ -663,12 +726,30 @@ export class AuctionAgent implements IAuctionAgent {
   }
 
   /**
-   * Convert current state to SquadAnalysis for DecisionEngine
+   * Convert current state to SquadAnalysis for DecisionEngine (with memoization)
    */
   private getSquadAnalysis(): SquadAnalysis {
     const squad = this.stateManager.getSquad();
     const budget = this.stateManager.getBudget();
     const squadSize = this.stateManager.getSquadSize();
+
+    // CRITICAL: Create cache key with budget granularity to detect budget changes
+    // Round budget to nearest 100L (1cr) to avoid excessive cache misses
+    const budgetRounded = Math.floor(budget / 100) * 100;
+    const cacheKey = `${squadSize}_${budgetRounded}`;
+
+    // Check if we have a cached result
+    if (this.squadAnalysisCache?.key === cacheKey) {
+      this.logger.debug('Squad analysis cache hit', { cacheKey });
+      return this.squadAnalysisCache.result;
+    }
+
+    this.logger.debug('Squad analysis cache miss, recalculating', {
+      cacheKey,
+      actualBudget: budget,
+      squadSize
+    });
+
     const overseasCount = this.stateManager.getOverseasCount();
 
     // Count players by role
@@ -710,7 +791,7 @@ export class AuctionAgent implements IAuctionAgent {
     const remainingSlots = Math.max(1, 25 - squadSize);
     const budgetPerSlot = budget / remainingSlots;
 
-    return {
+    const result: SquadAnalysis = {
       currentSize: squadSize,
       overseasCount,
       roleDistribution,
@@ -719,6 +800,11 @@ export class AuctionAgent implements IAuctionAgent {
       budgetPerSlot,
       phase,
     };
+
+    // Cache the result
+    this.squadAnalysisCache = { key: cacheKey, result };
+
+    return result;
   }
 
   /**
@@ -839,6 +925,11 @@ export class AuctionAgent implements IAuctionAgent {
     };
 
     this.decisions.push(log);
+
+    // Prevent memory leak: keep only last 100 decisions
+    if (this.decisions.length > 100) {
+      this.decisions.shift();
+    }
 
     this.logger.info('Decision logged', {
       player: player.name,
