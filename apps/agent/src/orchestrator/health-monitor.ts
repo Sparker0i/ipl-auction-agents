@@ -26,12 +26,12 @@ export class HealthMonitor {
    */
   start(getAgentStates: () => AgentProcess[]): void {
     this.logger.info('Starting health monitor', {
-      interval: this.config.healthCheckInterval,
+      interval: this.config.agentHealthCheckInterval,
     });
 
     this.monitorInterval = setInterval(() => {
       this.checkAllAgents(getAgentStates());
-    }, this.config.healthCheckInterval);
+    }, this.config.agentHealthCheckInterval);
   }
 
   /**
@@ -60,7 +60,7 @@ export class HealthMonitor {
       if (agent.lastHeartbeat) {
         const timeSinceHeartbeat = now.getTime() - agent.lastHeartbeat.getTime();
 
-        if (timeSinceHeartbeat > this.config.heartbeatTimeout) {
+        if (timeSinceHeartbeat > (this.config.heartbeatTimeout ?? 30000)) {
           this.logger.warn('Agent heartbeat timeout', {
             teamCode: agent.teamCode,
             lastHeartbeat: agent.lastHeartbeat,
@@ -77,7 +77,7 @@ export class HealthMonitor {
 
         // Give agent time to initialize and send first heartbeat
         // Use 2x the heartbeat interval to account for startup time
-        const firstHeartbeatTimeout = Math.max(60000, this.config.heartbeatTimeout / 6);
+        const firstHeartbeatTimeout = Math.max(60000, (this.config.heartbeatTimeout ?? 30000) / 6);
 
         if (timeSinceStart > firstHeartbeatTimeout) {
           this.logger.warn('Agent never sent heartbeat', {
@@ -111,7 +111,7 @@ export class HealthMonitor {
     }
 
     const timeSinceHeartbeat = Date.now() - agent.lastHeartbeat.getTime();
-    return timeSinceHeartbeat <= this.config.heartbeatTimeout;
+    return timeSinceHeartbeat <= (this.config.heartbeatTimeout ?? 30000);
   }
 
   /**

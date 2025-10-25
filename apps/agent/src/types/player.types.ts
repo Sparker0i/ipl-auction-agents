@@ -107,9 +107,9 @@ export interface BowlingPhaseStats {
 
 export interface PlayerStats {
   playerId: string;
-  batting: BattingStats | null;
-  bowling: BowlingStats | null;
-  fielding: FieldingStats;
+  battingStats: BattingStats | null;
+  bowlingStats: BowlingStats | null;
+  fieldingStats: FieldingStats | null;
   lastUpdated: Date;
 }
 

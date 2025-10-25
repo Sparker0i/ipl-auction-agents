@@ -1,4 +1,4 @@
-import { Browser, Page } from 'playwright';
+import { Browser, Page, ElementHandle } from 'playwright';
 import { BrowserConfig, IBrowserController } from '../types/agent.types.js';
 import { BrowserPool } from '../orchestrator/browser-pool.js';
 import type { Logger } from 'winston';
@@ -192,5 +192,30 @@ export class BrowserController implements IBrowserController {
 
     await this.page.screenshot({ path });
     this.logger.debug('Screenshot saved', { path });
+  }
+
+  /**
+   * Finds an element by trying a list of selectors in order.
+   * Returns the first element found.
+   */
+  async findElement(
+    selectors: string[]
+  ): Promise<ElementHandle | null> {
+    if (!this.page) {
+      throw new Error('Browser not launched');
+    }
+
+    for (const selector of selectors) {
+      try {
+        const element = await this.page.$(selector);
+        if (element) {
+          this.logger.debug('Element found with selector', { selector });
+          return element;
+        }
+      } catch (error) {
+        this.logger.warn('Error with selector, trying next', { selector, error });
+      }
+    }
+    return null;
   }
 }

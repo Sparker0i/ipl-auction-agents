@@ -31,7 +31,7 @@ export class SquadOptimizer {
     }
 
     // Calculate role gaps (positive = need more, negative = have surplus)
-    const roleGaps = this.calculateRoleGaps(roleDistribution, currentSize);
+    const roleGaps = this.calculateRoleGaps(roleDistribution);
 
     // Determine budget phase
     const phase = this.determineBudgetPhase(currentSize);
@@ -56,8 +56,7 @@ export class SquadOptimizer {
    * Calculate role gaps based on target distribution
    */
   private calculateRoleGaps(
-    current: Record<PlayerRole, number>,
-    squadSize: number
+    current: Record<PlayerRole, number>
   ): Record<PlayerRole, number> {
     const targetSize = 20; // Aim for 20-player squad as baseline
     const targetDistribution = this.strategy.roleDistribution;

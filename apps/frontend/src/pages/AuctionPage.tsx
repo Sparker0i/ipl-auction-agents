@@ -9,9 +9,11 @@ import {
   setCurrentSet,
   addBidToHistory,
   clearBidHistory,
+  addEventToHistory,
   setRTMState,
   clearRTMState,
 } from '../store/slices/auctionSlice';
+import type { AuctionEvent } from '../store/slices/auctionSlice';
 import { setTeams, updateTeamPurse, updateTeamCounts, updateTeamRTM, setMyTeamId } from '../store/slices/teamsSlice';
 import { setCurrentPlayer, setCurrentBid } from '../store/slices/playersSlice';
 import {
@@ -19,7 +21,7 @@ import {
   selectCurrentBid,
   selectAllTeams,
   selectMyTeam,
-  selectBidHistory,
+  selectEventHistory,
   selectRTMState,
 } from '../store/selectors';
 import type { RootState } from '../store';
@@ -46,7 +48,7 @@ export default function AuctionPage() {
   const currentBidState = useSelector(selectCurrentBid);
   const teams = useSelector(selectAllTeams);
   const myTeam = useSelector(selectMyTeam);
-  const bidHistory = useSelector(selectBidHistory);
+  const eventHistory = useSelector(selectEventHistory);
   const rtmState = useSelector(selectRTMState);
   const auctionState = useSelector((state: RootState) => state.auction);
 
@@ -64,6 +66,8 @@ export default function AuctionPage() {
   const [squadsData, setSquadsData] = useState<any[]>([]);
   const [isAuctionEnded, setIsAuctionEnded] = useState(false);
   const [isAR1Complete, setIsAR1Complete] = useState(false);
+  const [passedPlayers, setPassedPlayers] = useState<Set<string>>(new Set()); // Track players this team has passed on
+  const [passedTeams, setPassedTeams] = useState<{[playerId: string]: string[]}>({});// Track teams that passed on current player
 
   const sessionId = sessionApi.getSessionId();
   const myTeamId = auctionId ? sessionApi.getTeamId(auctionId) : null;
@@ -165,7 +169,6 @@ export default function AuctionPage() {
 
     // Listen for auction_joined (initial state sync on join/refresh)
     socketService.on('auction_joined', (data: any) => {
-      console.log('🎯 Auction joined - received full state:', data);
 
       // Update all teams
       if (data.allTeams) {
@@ -248,7 +251,6 @@ export default function AuctionPage() {
 
     // Listen for bid updates
     socketService.on('bid_placed', (data: any) => {
-      console.log('✅ Bid placed event received:', data);
       setBidding(false); // Reset bidding state on successful bid
 
       // Update Redux: current bid
@@ -260,7 +262,7 @@ export default function AuctionPage() {
         })
       );
 
-      // Update Redux: bid history
+      // Update Redux: bid history (legacy)
       dispatch(
         addBidToHistory({
           id: Date.now().toString(),
@@ -270,6 +272,19 @@ export default function AuctionPage() {
           playerName: data.playerName,
         })
       );
+
+      // Add to unified event history
+      const bidEvent: AuctionEvent = {
+        id: `bid-${Date.now()}`,
+        type: 'bid',
+        timestamp: data.timestamp,
+        playerId: data.playerId,
+        playerName: data.playerName,
+        teamId: data.teamId,
+        teamName: data.teamName,
+        bidAmountLakh: data.bidAmountLakh,
+      };
+      dispatch(addEventToHistory(bidEvent));
 
       // Update team purse if provided
       if (data.teamPurseRemainingCr !== undefined) {
@@ -288,7 +303,6 @@ export default function AuctionPage() {
 
     // Listen for new player
     socketService.on('new_player', (data: any) => {
-      console.log('New player:', data);
 
       // Update Redux: current player
       dispatch(setCurrentPlayer(data.player));
@@ -300,25 +314,46 @@ export default function AuctionPage() {
         })
       );
 
-      // Clear bid history and RTM state
+      // Clear bid history and RTM state for new player
       dispatch(clearBidHistory());
       dispatch(clearRTMState());
+
+      // Clear passed teams state for the new player (for All Teams section)
+      // Note: eventHistory keeps all pass events across players (last 30)
+      setPassedTeams({});
 
       // Update round/set if provided
       if (data.currentRound) dispatch(setCurrentRound(data.currentRound));
       if (data.currentSet) dispatch(setCurrentSet(data.currentSet));
 
-      // Dispatch custom event for agents
-      const event = new CustomEvent('auction-player-update', { detail: data.player });
-      window.dispatchEvent(event);
+      // Dispatch custom event for agents (async to not block UI)
+      setTimeout(() => {
+        const event = new CustomEvent('auction-player-update', { detail: data.player });
+        window.dispatchEvent(event);
+      }, 0);
     });
 
     // Listen for player sold
     socketService.on('player_sold', (data: any) => {
-      console.log('Player sold:', data);
 
-      // Clear RTM state (player sold without RTM)
+      // Add to event history
+      const soldEvent: AuctionEvent = {
+        id: `sold-${Date.now()}`,
+        type: 'player_sold',
+        timestamp: new Date().toISOString(),
+        playerId: data.playerId,
+        playerName: data.playerName,
+        teamId: data.teamId,
+        teamName: data.teamName,
+        bidAmountLakh: data.finalPriceCr * 100, // Convert crores to lakhs
+      };
+      dispatch(addEventToHistory(soldEvent));
+
+      // Clear RTM state (player sold without RTM or after RTM finalized)
       dispatch(clearRTMState());
+
+      // Clear passed teams for sold player
+      setPassedTeams({});
 
       // Update winning team stats
       if (data.winningTeam) {
@@ -381,32 +416,83 @@ export default function AuctionPage() {
 
     // Listen for player unsold
     socketService.on('player_unsold', (data: any) => {
-      console.log('Player unsold:', data);
+
+      // Add to event history
+      const unsoldEvent: AuctionEvent = {
+        id: `unsold-${Date.now()}`,
+        type: 'player_unsold',
+        timestamp: new Date().toISOString(),
+        playerId: data.playerId,
+        playerName: data.playerName,
+        teamId: '',
+        teamName: 'Unsold',
+      };
+      dispatch(addEventToHistory(unsoldEvent));
 
       // Clear RTM state
       dispatch(clearRTMState());
 
       // Current player will be cleared when next player loads
 
-      // Dispatch custom event for agents
-      const event = new CustomEvent('auction-player-unsold', { detail: data });
-      window.dispatchEvent(event);
+      // Dispatch custom event for agents (async to not block UI)
+      setTimeout(() => {
+        const event = new CustomEvent('auction-player-unsold', { detail: data });
+        window.dispatchEvent(event);
+      }, 0);
     });
 
     // Listen for RTM triggered
     socketService.on('rtm_triggered', (data: any) => {
-      console.log('RTM triggered:', data);
       dispatch(setRTMState(data));
+
+      // CRITICAL: Ensure currentPlayer is set to the RTM player
+      // This makes player data (like role) available to agents during RTM.
+      const rtmPlayer = data.player || { id: data.playerId, name: data.playerName, ...data };
+      dispatch(setCurrentPlayer(rtmPlayer));
+
+      // Add to event history
+      const rtmEvent: AuctionEvent = {
+        id: `rtm-trigger-${Date.now()}`,
+        type: 'rtm_triggered',
+        timestamp: new Date().toISOString(),
+        playerId: data.playerId,
+        playerName: data.playerName,
+        teamId: data.rtmTeamId,
+        teamName: data.rtmTeamName,
+        rtmDetails: {
+          isCapped: data.isCapped,
+          originalTeamId: data.originalWinnerTeamId,
+          originalTeamName: data.originalWinnerTeamName,
+        },
+      };
+      dispatch(addEventToHistory(rtmEvent));
 
       // Dispatch custom event for agents
       const event = new CustomEvent('auction-rtm-triggered', { detail: data });
       window.dispatchEvent(event);
     });
 
-    // Listen for RTM used
+    // Listen for RTM used (card activated)
     socketService.on('rtm_used', (data: any) => {
-      console.log('🎯 RTM used:', data);
       dispatch(setRTMState(data));
+
+      // Add to event history - RTM accepted (card used)
+      const rtmAcceptedEvent: AuctionEvent = {
+        id: `rtm-accepted-${Date.now()}`,
+        type: 'rtm_accepted',
+        timestamp: new Date().toISOString(),
+        playerId: data.playerId || rtmState?.playerId || '',
+        playerName: data.playerName || rtmState?.playerName || '',
+        teamId: data.rtmTeamId,
+        teamName: data.rtmTeamName,
+        bidAmountLakh: data.matchedBidLakh,
+        rtmDetails: {
+          isCapped: data.isCapped,
+          originalTeamId: data.originalWinnerTeamId,
+          originalTeamName: data.originalWinnerTeamName,
+        },
+      };
+      dispatch(addEventToHistory(rtmAcceptedEvent));
 
       // Dispatch custom event for agents
       const event = new CustomEvent('auction-rtm-used', { detail: data });
@@ -415,9 +501,26 @@ export default function AuctionPage() {
 
     // Listen for counter-bid placed
     socketService.on('rtm_counter_bid_placed', (data: any) => {
-      console.log('💰 Counter-bid placed:', data);
       // Backend sends full RTM state with counterBidMade: true
       dispatch(setRTMState(data));
+
+      // Add to event history
+      const counterBidEvent: AuctionEvent = {
+        id: `rtm-counter-${Date.now()}`,
+        type: 'rtm_counter_bid',
+        timestamp: new Date().toISOString(),
+        playerId: data.playerId,
+        playerName: data.playerName,
+        teamId: data.originalWinnerTeamId,
+        teamName: data.originalWinnerTeamName,
+        rtmDetails: {
+          isCapped: data.isCapped,
+          originalTeamId: data.originalWinnerTeamId,
+          originalTeamName: data.originalWinnerTeamName, // Corrected property access
+          counterBidLakh: data.counterBidLakh,
+        },
+      };
+      dispatch(addEventToHistory(counterBidEvent));
 
       // Dispatch custom event for agents
       const event = new CustomEvent('auction-rtm-counter-bid', { detail: data });
@@ -446,6 +549,70 @@ export default function AuctionPage() {
       console.log('🚀 Round transition:', data);
       dispatch(setCurrentRound(data.round));
       setRoundCompleteMessage(null); // Clear the complete message
+    });
+
+    // Listen for pass events
+    socketService.on('player_passed', (data: any) => {
+
+      // Update passed teams for current player (for All Teams section display)
+      if (data.playerId && currentPlayer && data.playerId === currentPlayer.id) {
+        setPassedTeams(prev => {
+          const existing = prev[data.playerId] || [];
+          // Only add if not already in the list (prevent duplicates)
+          if (!existing.includes(data.teamId)) {
+            return {
+              ...prev,
+              [data.playerId]: [...existing, data.teamId],
+            };
+          }
+          return prev;
+        });
+      }
+
+      // Add to unified event history
+      const passEvent: AuctionEvent = {
+        id: `pass-${Date.now()}`,
+        type: 'pass',
+        timestamp: data.timestamp || new Date().toISOString(),
+        playerId: data.playerId || (currentPlayer?.id ?? ''),
+        playerName: data.playerName || (currentPlayer?.name ?? ''),
+        teamId: data.teamId,
+        teamName: data.teamName,
+      };
+      dispatch(addEventToHistory(passEvent));
+    });
+
+    socketService.on('pass_confirmed', () => {
+      // Pass confirmed - no action needed, event already added when player_passed received
+    });
+
+    // Listen for team coming back (when a team comes back after passing)
+    socketService.on('team_came_back', (data: any) => {
+      // Remove team from passed teams for current player
+      if (data.playerId && currentPlayer && data.playerId === currentPlayer.id) {
+        setPassedTeams(prev => {
+          const updated = { ...prev };
+          if (updated[data.playerId]) {
+            updated[data.playerId] = updated[data.playerId].filter((id: string) => id !== data.teamId);
+            if (updated[data.playerId].length === 0) {
+              delete updated[data.playerId];
+            }
+          }
+          return updated;
+        });
+      }
+
+      // Add come back event to history
+      const comeBackEvent: AuctionEvent = {
+        id: `comeback-${Date.now()}`,
+        type: 'come_back',
+        timestamp: data.timestamp || new Date().toISOString(),
+        playerId: data.playerId || (currentPlayer?.id ?? ''),
+        playerName: data.playerName || (currentPlayer?.name ?? ''),
+        teamId: data.teamId,
+        teamName: data.teamName,
+      };
+      dispatch(addEventToHistory(comeBackEvent));
     });
 
     // Listen for errors
@@ -479,17 +646,13 @@ export default function AuctionPage() {
       socketService.off('rtm_triggered');
       socketService.off('rtm_used');
       socketService.off('rtm_counter_bid_placed');
+      socketService.off('team_came_back');
       socketService.off('auction_ended');
       socketService.off('error');
     };
   }, [auctionId, myTeamId, sessionId, dispatch, auctionState]);
 
-  // Auto-scroll bid history
-  useEffect(() => {
-    if (bidHistoryRef.current) {
-      bidHistoryRef.current.scrollTop = 0;
-    }
-  }, [bidHistory]);
+  // Auto-scroll event history to top when new events arrive (removed for performance)
 
   // Fetch pool data when Pool tab is activated
   useEffect(() => {
@@ -578,6 +741,41 @@ export default function AuctionPage() {
       setError('Failed to place bid');
     } finally {
       setBidding(false);
+    }
+  };
+
+  const handlePass = async () => {
+    if (!currentPlayer || !myTeamId || !auctionId || !sessionId) return;
+
+    try {
+      socketService.passPlayer(auctionId, currentPlayer.id, myTeamId, sessionId);
+
+      // Optimistically update UI
+      setPassedPlayers(prev => new Set(prev).add(currentPlayer.id));
+    } catch (err: any) {
+      console.error('Failed to pass on player:', err);
+      setError('Failed to pass on player');
+    }
+  };
+
+  const handleComeBack = async () => {
+    if (!currentPlayer || !myTeamId || !auctionId || !sessionId) return;
+
+    try {
+      socketService.comeBack(auctionId, currentPlayer.id, myTeamId, sessionId);
+
+      // Optimistically update UI - remove from passed players (only if it exists)
+      setPassedPlayers(prev => {
+        if (prev.has(currentPlayer.id)) {
+          const updated = new Set(prev);
+          updated.delete(currentPlayer.id);
+          return updated;
+        }
+        return prev; // No change needed
+      });
+    } catch (err: any) {
+      console.error('Failed to come back:', err);
+      setError('Failed to come back');
     }
   };
 
@@ -721,11 +919,11 @@ export default function AuctionPage() {
   };
 
   const handleUseRTM = async () => {
-    if (!auctionId || !myTeamId) return;
+    if (!auctionId || !myTeamId || !rtmState?.playerId) return;
 
     try {
       console.log('🎯 Using RTM card');
-      socketService.useRTM(auctionId, myTeamId);
+      socketService.useRTM(auctionId, rtmState.playerId, myTeamId);
     } catch (err: any) {
       console.error('Failed to use RTM:', err);
       setError('Failed to use RTM');
@@ -952,6 +1150,25 @@ export default function AuctionPage() {
                       {currentPlayer.isCapped ? 'Capped' : 'Uncapped'}
                     </span>
                   </div>
+
+                  {/* RTM Indicator */}
+                  {(currentPlayer as any).rtmEligible && (currentPlayer as any).rtmTeamName && (
+                    <div className="mt-4 bg-yellow-50 border-2 border-yellow-400 rounded-lg p-3">
+                      <div className="flex items-center justify-center gap-2">
+                        <svg className="w-5 h-5 text-yellow-600" fill="currentColor" viewBox="0 0 20 20">
+                          <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                        </svg>
+                        <span className="font-semibold text-yellow-800">
+                          RTM Available for {(currentPlayer as any).rtmTeamName}
+                        </span>
+                      </div>
+                      {(currentPlayer as any).iplTeam2024 && (
+                        <div className="text-xs text-yellow-700 mt-1">
+                          Played for {(currentPlayer as any).iplTeam2024} in 2024
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 <div className="bg-gradient-to-r from-purple-600 to-blue-600 rounded-xl p-8 text-center mb-6">
@@ -1128,15 +1345,36 @@ export default function AuctionPage() {
                   {/* Bidding Controls - Show if user has a team */}
                   {myTeamId && (
                     <>
-                      <button
-                        onClick={handlePlaceBid}
-                        disabled={bidding || !canBid || !!rtmState || isMyTeamCurrentBidder}
-                        className="w-full bg-green-600 text-white px-8 py-4 rounded-xl hover:bg-green-700 transition-colors font-bold text-xl disabled:bg-gray-400 disabled:cursor-not-allowed"
-                        data-bid-button
-                      >
-                        {bidding ? 'Placing Bid...' : rtmState ? 'RTM in Progress...' : isMyTeamCurrentBidder ? 'Waiting for Other Teams...' : increment > 0 ? `Bid ₹${nextBid / 100} cr (+₹${increment}L)` : `Bid ₹${nextBid / 100} cr`}
-                      </button>
-                      {!canBid && !rtmState && !isMyTeamCurrentBidder && (
+                      <div className="flex gap-2">
+                        {/* Show Come Back button if team has passed, otherwise show Bid button */}
+                        {currentPlayer && passedPlayers.has(currentPlayer.id) ? (
+                          <button
+                            onClick={handleComeBack}
+                            disabled={bidding || !!rtmState}
+                            data-testid="come-back-button"
+                            className="flex-1 bg-cyan-600 text-white px-8 py-4 rounded-xl hover:bg-cyan-700 transition-colors font-bold text-xl disabled:bg-gray-400 disabled:cursor-not-allowed"
+                          >
+                            {bidding ? 'Coming Back...' : '🔄 Come Back'}
+                          </button>
+                        ) : (
+                          <button
+                            onClick={handlePlaceBid}
+                            disabled={bidding || !canBid || !!rtmState || isMyTeamCurrentBidder}
+                            className="flex-1 bg-green-600 text-white px-8 py-4 rounded-xl hover:bg-green-700 transition-colors font-bold text-xl disabled:bg-gray-400 disabled:cursor-not-allowed"
+                            data-bid-button
+                          >
+                            {bidding ? 'Placing Bid...' : rtmState ? 'RTM in Progress...' : isMyTeamCurrentBidder ? 'Waiting for Other Teams...' : increment > 0 ? `Bid ₹${nextBid / 100} cr (+₹${increment}L)` : `Bid ₹${nextBid / 100} cr`}
+                          </button>
+                        )}
+                        <button
+                          onClick={handlePass}
+                          disabled={bidding || !!rtmState || (currentPlayer && passedPlayers.has(currentPlayer.id))}
+                          className="bg-orange-600 text-white px-6 py-4 rounded-xl hover:bg-orange-700 transition-colors font-bold text-lg disabled:bg-gray-400 disabled:cursor-not-allowed whitespace-nowrap"
+                        >
+                          {currentPlayer && passedPlayers.has(currentPlayer.id) ? '✋ Passed' : '✋ Pass'}
+                        </button>
+                      </div>
+                      {!canBid && !rtmState && !isMyTeamCurrentBidder && !(currentPlayer && passedPlayers.has(currentPlayer.id)) && (
                         <p className="text-red-600 text-center text-sm">
                           Insufficient purse to bid
                         </p>
@@ -1149,6 +1387,16 @@ export default function AuctionPage() {
                       {isMyTeamCurrentBidder && !rtmState && (
                         <p className="text-blue-600 text-center text-sm">
                           You're the highest bidder - Wait for another team to bid
+                        </p>
+                      )}
+                      {currentPlayer && passedPlayers.has(currentPlayer.id) && (
+                        <p className="text-cyan-600 text-center text-sm">
+                          You passed - Click "Come Back" to rejoin bidding
+                        </p>
+                      )}
+                      {currentPlayer && passedTeams[currentPlayer.id] && passedTeams[currentPlayer.id].length > 0 && (
+                        <p className="text-gray-600 text-center text-xs">
+                          {passedTeams[currentPlayer.id].length} team{passedTeams[currentPlayer.id].length > 1 ? 's' : ''} passed
                         </p>
                       )}
                     </>
@@ -1283,32 +1531,181 @@ export default function AuctionPage() {
               </div>
             )}
 
-            {/* Bid History */}
+            {/* Event History - Enhanced with all auction events */}
             <div className="bg-white rounded-xl shadow-2xl p-6">
-              <h3 className="text-xl font-bold text-gray-800 mb-4">Bid History</h3>
+              <h3 className="text-xl font-bold text-gray-800 mb-4">Auction Events</h3>
               <div
                 ref={bidHistoryRef}
-                className="space-y-2 max-h-64 overflow-y-auto"
+                className="space-y-2 max-h-64 overflow-y-auto scroll-smooth"
+                style={{ scrollBehavior: 'auto' }}
               >
-                {bidHistory.length === 0 ? (
-                  <p className="text-gray-500 text-center py-8">No bids yet</p>
+                {eventHistory.length === 0 ? (
+                  <p className="text-gray-500 text-center py-8">No events yet</p>
                 ) : (
-                  bidHistory.map((bid) => (
-                    <div
-                      key={bid.id}
-                      className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
-                    >
-                      <div>
-                        <span className="font-bold text-gray-800">{bid.teamName}</span>
-                        <span className="text-gray-600 text-sm ml-2">
-                          {new Date(bid.timestamp).toLocaleTimeString()}
-                        </span>
-                      </div>
-                      <div className="text-lg font-bold text-green-600">
-                        ₹{bid.bidAmountLakh / 100} cr
-                      </div>
-                    </div>
-                  ))
+                  eventHistory.map((event) => {
+                    // Render different UI based on event type
+                    switch (event.type) {
+                      case 'bid':
+                        return (
+                          <div
+                            key={event.id}
+                            className="flex items-center justify-between p-3 bg-green-50 border-l-4 border-green-500 rounded-lg"
+                          >
+                            <div>
+                              <span className="font-bold text-gray-800">{event.teamName}</span>
+                              <span className="text-gray-600 text-xs ml-2">
+                                bid on {event.playerName}
+                              </span>
+                              <div className="text-gray-500 text-xs">
+                                {new Date(event.timestamp).toLocaleTimeString()}
+                              </div>
+                            </div>
+                            <div className="text-lg font-bold text-green-600">
+                              ₹{(event.bidAmountLakh || 0) / 100} cr
+                            </div>
+                          </div>
+                        );
+
+                      case 'pass':
+                        return (
+                          <div
+                            key={event.id}
+                            className="flex items-center justify-between p-3 bg-orange-50 border-l-4 border-orange-500 rounded-lg"
+                          >
+                            <div>
+                              <span className="font-bold text-gray-800">{event.teamName}</span>
+                              <span className="text-orange-600 text-xs ml-2">
+                                ✋ passed on {event.playerName}
+                              </span>
+                              <div className="text-gray-500 text-xs">
+                                {new Date(event.timestamp).toLocaleTimeString()}
+                              </div>
+                            </div>
+                          </div>
+                        );
+
+                      case 'rtm_triggered':
+                        return (
+                          <div
+                            key={event.id}
+                            className="flex items-center justify-between p-3 bg-purple-50 border-l-4 border-purple-500 rounded-lg"
+                          >
+                            <div>
+                              <span className="text-purple-700 font-bold text-sm">
+                                🎯 RTM Opportunity
+                              </span>
+                              <div className="text-gray-700 text-xs">
+                                {event.teamName} can match for {event.playerName}
+                              </div>
+                              <div className="text-gray-500 text-xs">
+                                {new Date(event.timestamp).toLocaleTimeString()}
+                              </div>
+                            </div>
+                          </div>
+                        );
+
+                      case 'rtm_accepted':
+                        return (
+                          <div
+                            key={event.id}
+                            className="flex items-center justify-between p-3 bg-blue-50 border-l-4 border-blue-500 rounded-lg"
+                          >
+                            <div>
+                              <span className="text-blue-700 font-bold text-sm">
+                                ✅ RTM Card Used
+                              </span>
+                              <div className="text-gray-700 text-xs">
+                                {event.teamName} matched ₹{(event.bidAmountLakh || 0) / 100} cr for {event.playerName}
+                              </div>
+                              <div className="text-gray-500 text-xs">
+                                {new Date(event.timestamp).toLocaleTimeString()}
+                              </div>
+                            </div>
+                          </div>
+                        );
+
+                      case 'rtm_counter_bid':
+                        return (
+                          <div
+                            key={event.id}
+                            className="flex items-center justify-between p-3 bg-indigo-50 border-l-4 border-indigo-500 rounded-lg"
+                          >
+                            <div>
+                              <span className="text-indigo-700 font-bold text-sm">
+                                💰 Counter Bid
+                              </span>
+                              <div className="text-gray-700 text-xs">
+                                {event.teamName} counter-bid ₹{(event.rtmDetails?.counterBidLakh || 0) / 100} cr
+                              </div>
+                              <div className="text-gray-500 text-xs">
+                                {new Date(event.timestamp).toLocaleTimeString()}
+                              </div>
+                            </div>
+                          </div>
+                        );
+
+                      case 'player_sold':
+                        return (
+                          <div
+                            key={event.id}
+                            className="flex items-center justify-between p-3 bg-emerald-50 border-l-4 border-emerald-500 rounded-lg"
+                          >
+                            <div>
+                              <span className="text-emerald-700 font-bold text-sm">
+                                ⚡ SOLD
+                              </span>
+                              <div className="text-gray-700 text-xs">
+                                {event.playerName} → {event.teamName} for ₹{(event.bidAmountLakh || 0) / 100} cr
+                              </div>
+                              <div className="text-gray-500 text-xs">
+                                {new Date(event.timestamp).toLocaleTimeString()}
+                              </div>
+                            </div>
+                          </div>
+                        );
+
+                      case 'player_unsold':
+                        return (
+                          <div
+                            key={event.id}
+                            className="flex items-center justify-between p-3 bg-gray-100 border-l-4 border-gray-400 rounded-lg"
+                          >
+                            <div>
+                              <span className="text-gray-700 font-bold text-sm">
+                                ❌ UNSOLD
+                              </span>
+                              <div className="text-gray-600 text-xs">
+                                {event.playerName} went unsold
+                              </div>
+                              <div className="text-gray-500 text-xs">
+                                {new Date(event.timestamp).toLocaleTimeString()}
+                              </div>
+                            </div>
+                          </div>
+                        );
+
+                      case 'come_back':
+                        return (
+                          <div
+                            key={event.id}
+                            className="flex items-center justify-between p-3 bg-cyan-50 border-l-4 border-cyan-500 rounded-lg"
+                          >
+                            <div>
+                              <span className="font-bold text-gray-800">{event.teamName}</span>
+                              <span className="text-cyan-600 text-xs ml-2">
+                                🔄 came back for {event.playerName}
+                              </span>
+                              <div className="text-gray-500 text-xs">
+                                {new Date(event.timestamp).toLocaleTimeString()}
+                              </div>
+                            </div>
+                          </div>
+                        );
+
+                      default:
+                        return null;
+                    }
+                  })
                 )}
               </div>
             </div>
@@ -1319,43 +1716,57 @@ export default function AuctionPage() {
             <div className="bg-white rounded-xl shadow-2xl p-6">
               <h3 className="text-xl font-bold text-gray-800 mb-4">All Teams</h3>
               <div className="space-y-3">
-                {teams.map((team) => (
-                  <div
-                    key={team.id}
-                    className={`p-4 rounded-lg border-2 ${
-                      team.id === myTeamId
-                        ? 'border-purple-500 bg-purple-50'
-                        : 'border-gray-200'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between mb-2">
-                      <h4 className="font-bold text-gray-800">{team.teamName}</h4>
-                      {team.id === myTeamId && (
-                        <span className="bg-purple-500 text-white px-2 py-1 rounded text-xs font-bold">
-                          YOU
-                        </span>
-                      )}
+                {teams.map((team) => {
+                  // Check if team has passed on current player
+                  const hasPassedCurrentPlayer = currentPlayer && passedTeams[currentPlayer.id]?.includes(team.id);
+
+                  return (
+                    <div
+                      key={team.id}
+                      className={`p-4 rounded-lg border-2 ${
+                        team.id === myTeamId
+                          ? 'border-purple-500 bg-purple-50'
+                          : hasPassedCurrentPlayer
+                          ? 'border-orange-300 bg-orange-50'
+                          : 'border-gray-200'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <h4 className="font-bold text-gray-800">{team.teamName}</h4>
+                        <div className="flex gap-2">
+                          {hasPassedCurrentPlayer && (
+                            <span className="bg-orange-500 text-white px-2 py-1 rounded text-xs font-bold">
+                              ✋ PASSED
+                            </span>
+                          )}
+                          {team.id === myTeamId && (
+                            <span className="bg-purple-500 text-white px-2 py-1 rounded text-xs font-bold">
+                              YOU
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="text-sm space-y-1">
+                        <div className="flex justify-between text-gray-600">
+                          <span>Purse:</span>
+                          <span className="font-bold text-green-600">
+                            ₹{Number(team.purseRemainingCr).toFixed(2)} cr
+                          </span>
+                        </div>
+                        <div className="flex justify-between text-gray-600">
+                          <span>Players:</span>
+                          <span className="font-bold">{team.playerCount}</span>
+                        </div>
+                        <div className="flex justify-between text-gray-600">
+                          <span>RTM:</span>
+                          <span className="font-bold">
+                            {team.rtmCardsTotal - team.rtmCardsUsed} / {team.rtmCardsTotal}
+                          </span>
+                        </div>
+                      </div>
                     </div>
-                    <div className="text-sm space-y-1">
-                      <div className="flex justify-between text-gray-600">
-                        <span>Purse:</span>
-                        <span className="font-bold text-green-600">
-                          ₹{Number(team.purseRemainingCr).toFixed(2)} cr
-                        </span>
-                      </div>
-                      <div className="flex justify-between text-gray-600">
-                        <span>Players:</span>
-                        <span className="font-bold">{team.playerCount}</span>
-                      </div>
-                      <div className="flex justify-between text-gray-600">
-                        <span>RTM:</span>
-                        <span className="font-bold">
-                          {team.rtmCardsTotal - team.rtmCardsUsed} / {team.rtmCardsTotal}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           </div>

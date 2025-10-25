@@ -109,13 +109,14 @@ class SocketService {
   }
 
   // RTM: Use RTM card
-  useRTM(auctionId: string, teamId: string): void {
+  useRTM(auctionId: string, playerId: string, teamId: string): void {
     if (!this.socket) {
       throw new Error('Socket not connected');
     }
 
     this.socket.emit('use_rtm', {
       auctionId,
+      playerId,
       teamId,
     });
   }
@@ -130,6 +131,34 @@ class SocketService {
       auctionId,
       teamId,
       newBidLakh,
+    });
+  }
+
+  // Pass on current player
+  passPlayer(auctionId: string, playerId: string, teamId: string, sessionId: string): void {
+    if (!this.socket) {
+      throw new Error('Socket not connected');
+    }
+
+    this.socket.emit('pass_player', {
+      auctionId,
+      playerId,
+      teamId,
+      sessionId,
+    });
+  }
+
+  // Come back to bidding after passing
+  comeBack(auctionId: string, playerId: string, teamId: string, sessionId: string): void {
+    if (!this.socket) {
+      throw new Error('Socket not connected');
+    }
+
+    this.socket.emit('come_back', {
+      auctionId,
+      playerId,
+      teamId,
+      sessionId,
     });
   }
 

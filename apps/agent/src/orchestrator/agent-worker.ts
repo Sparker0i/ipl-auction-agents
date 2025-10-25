@@ -14,7 +14,7 @@ import { StatsCache } from '../data/stats-cache.js';
 import { loadConfig } from '../utils/config.js';
 import { createLogger } from '../utils/logger.js';
 import { TeamCode, AgentConfig } from '../types/agent.types.js';
-import { SquadOptimizer } from '../strategy/squad-optimizer.js';
+// Unused: import { SquadOptimizer } from '../strategy/squad-optimizer.js';
 
 // Get team code and auction code from environment
 const teamCode = (process.env.TEAM_CODE as TeamCode) || 'CSK';

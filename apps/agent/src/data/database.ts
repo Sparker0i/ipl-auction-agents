@@ -211,9 +211,9 @@ export class PlayerDatabase {
 
     stmt.run(
       playerId,
-      stats.batting ? JSON.stringify(stats.batting) : null,
-      stats.bowling ? JSON.stringify(stats.bowling) : null,
-      stats.fielding ? JSON.stringify(stats.fielding) : null
+      stats.battingStats ? JSON.stringify(stats.battingStats) : null,
+      stats.bowlingStats ? JSON.stringify(stats.bowlingStats) : null,
+      stats.fieldingStats ? JSON.stringify(stats.fieldingStats) : null
     );
   }
 
@@ -225,9 +225,9 @@ export class PlayerDatabase {
 
     return {
       playerId: row.player_id,
-      batting: row.batting_stats ? JSON.parse(row.batting_stats) : null,
-      bowling: row.bowling_stats ? JSON.parse(row.bowling_stats) : null,
-      fielding: row.fielding_stats ? JSON.parse(row.fielding_stats) : null,
+      battingStats: row.batting_stats ? JSON.parse(row.batting_stats) : null,
+      bowlingStats: row.bowling_stats ? JSON.parse(row.bowling_stats) : null,
+      fieldingStats: row.fielding_stats ? JSON.parse(row.fielding_stats) : null,
       lastUpdated: new Date(row.last_updated),
     };
   }

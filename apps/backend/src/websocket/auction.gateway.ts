@@ -168,6 +168,32 @@ export class AuctionGateway implements OnGatewayConnection, OnGatewayDisconnect 
         return;
       }
 
+      // Verify teams array exists (cache might be corrupted)
+      if (!auction.teams || !Array.isArray(auction.teams)) {
+        console.error('Auction teams array missing or corrupted, invalidating cache');
+        await this.redis.invalidateAuctionCache(auctionId);
+
+        // Fetch fresh from database
+        auction = await this.prisma.auction.findUnique({
+          where: { id: auctionId },
+          include: {
+            teams: true,
+            currentPlayer: true,
+          },
+        });
+
+        if (!auction || !auction.teams) {
+          client.emit('error', {
+            code: 'AUCTION_DATA_CORRUPTED',
+            message: 'Auction data is corrupted',
+          });
+          return;
+        }
+
+        // Cache the fresh data
+        await this.redis.cacheAuction(auctionId, auction, 30);
+      }
+
       // Verify team belongs to this user
       const team = auction.teams.find((t: any) => t.id === teamId);
       if (!team || team.ownerSessionId !== sessionId) {
@@ -247,6 +273,152 @@ export class AuctionGateway implements OnGatewayConnection, OnGatewayDisconnect 
   }
 
   /**
+   * Rejoin auction (for agents reopening browser contexts)
+   * Bypasses lobby/team-selection, directly reconnects to auction
+   */
+  @SubscribeMessage('rejoin_auction')
+  async handleRejoinAuction(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: JoinAuctionPayload,
+  ) {
+    try {
+      const { auctionId, teamId, sessionId } = payload;
+
+      // Try to get auction from cache first
+      let auction = await this.redis.getCachedAuction(auctionId);
+
+      if (!auction) {
+        // Cache miss - fetch from database
+        auction = await this.prisma.auction.findUnique({
+          where: { id: auctionId },
+          include: {
+            teams: true,
+            currentPlayer: true,
+          },
+        });
+
+        // Cache for 30 seconds
+        if (auction) {
+          await this.redis.cacheAuction(auctionId, auction, 30);
+        }
+      }
+
+      if (!auction) {
+        client.emit('error', {
+          code: 'AUCTION_NOT_FOUND',
+          message: 'Auction not found',
+        });
+        return;
+      }
+
+      // Verify teams array exists (cache might be corrupted)
+      if (!auction.teams || !Array.isArray(auction.teams)) {
+        console.error('Auction teams array missing or corrupted during rejoin, invalidating cache');
+        await this.redis.invalidateAuctionCache(auctionId);
+
+        // Fetch fresh from database
+        auction = await this.prisma.auction.findUnique({
+          where: { id: auctionId },
+          include: {
+            teams: true,
+            currentPlayer: true,
+          },
+        });
+
+        if (!auction || !auction.teams) {
+          client.emit('error', {
+            code: 'AUCTION_DATA_CORRUPTED',
+            message: 'Auction data is corrupted',
+          });
+          return;
+        }
+
+        // Cache the fresh data
+        await this.redis.cacheAuction(auctionId, auction, 30);
+      }
+
+      // Verify team belongs to this user (critical for security)
+      const team = auction.teams.find((t: any) => t.id === teamId);
+      if (!team || team.ownerSessionId !== sessionId) {
+        client.emit('error', {
+          code: 'UNAUTHORIZED_TEAM',
+          message: 'You do not own this team',
+        });
+        return;
+      }
+
+      // Join Socket.io room
+      const roomName = `auction:${auctionId}`;
+      await client.join(roomName);
+
+      // Track user in Redis
+      await this.redis.addAuctionUser(auctionId, client.id);
+
+      // Get RTM state if active
+      const rtmState = await this.redis.getRTMState(auctionId);
+
+      // Send current auction state to client (same as join_auction)
+      client.emit('auction_rejoined', {
+        auction: {
+          id: auction.id,
+          name: auction.name,
+          status: auction.status,
+          currentRound: auction.currentRound,
+          currentSet: auction.currentSet,
+        },
+        myTeam: {
+          id: team.id,
+          teamName: team.teamName,
+          purseRemainingCr: toNumber(team.purseRemainingCr),
+          rtmCardsTotal: team.rtmCardsTotal,
+          rtmCardsUsed: team.rtmCardsUsed,
+          rtmCappedUsed: team.rtmCappedUsed,
+          rtmUncappedUsed: team.rtmUncappedUsed,
+          playerCount: team.playerCount,
+          overseasCount: team.overseasCount,
+        },
+        allTeams: auction.teams.map((t: any) => ({
+          id: t.id,
+          teamName: t.teamName,
+          purseRemainingCr: toNumber(t.purseRemainingCr),
+          rtmCardsTotal: t.rtmCardsTotal,
+          rtmCardsUsed: t.rtmCardsUsed,
+          rtmCappedUsed: t.rtmCappedUsed,
+          rtmUncappedUsed: t.rtmUncappedUsed,
+          playerCount: t.playerCount,
+          overseasCount: t.overseasCount,
+        })),
+        currentPlayer: auction.currentPlayer ? {
+          id: auction.currentPlayer.id,
+          name: auction.currentPlayer.name,
+          role: auction.currentPlayer.role,
+          country: auction.currentPlayer.country,
+          basePriceLakh: auction.currentPlayer.basePriceLakh,
+          isOverseas: auction.currentPlayer.isOverseas,
+          isCapped: auction.currentPlayer.isCapped,
+          currentBidLakh: auction.currentBidLakh,
+          biddingTeamId: auction.currentBiddingTeamId,
+        } : null,
+        rtmState: rtmState || null,
+      });
+
+      // Log rejoin for monitoring
+      console.log(`[REJOIN] Team ${team.teamName} rejoined auction ${auctionId}`);
+
+      // Broadcast to room that user rejoined (optional, can be silent)
+      this.server.to(roomName).emit('user_rejoined', {
+        teamName: team.teamName,
+      });
+    } catch (error) {
+      console.error('Error rejoining auction:', error);
+      client.emit('error', {
+        code: 'REJOIN_FAILED',
+        message: error.message || 'Failed to rejoin auction',
+      });
+    }
+  }
+
+  /**
    * Place a bid
    */
   @SubscribeMessage('place_bid')
@@ -265,8 +437,9 @@ export class AuctionGateway implements OnGatewayConnection, OnGatewayDisconnect 
         bidAmountLakh,
       );
 
-      // Broadcast to all clients in auction room
       const roomName = `auction:${auctionId}`;
+
+      // Broadcast bid to all clients in auction room
       this.server.to(roomName).emit('bid_placed', {
         playerId: result.player?.id,
         playerName: result.player?.name,
@@ -280,6 +453,138 @@ export class AuctionGateway implements OnGatewayConnection, OnGatewayDisconnect 
       client.emit('error', {
         code: 'BID_FAILED',
         message: error.message || 'Failed to place bid',
+      });
+    }
+  }
+
+  /**
+   * Team passes on a player (opts out of bidding)
+   */
+  @SubscribeMessage('pass_player')
+  async handlePassPlayer(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: { auctionId: string; playerId: string; teamId: string; sessionId: string },
+  ) {
+    try {
+      const { auctionId, playerId, teamId, sessionId } = payload;
+
+      // Verify team ownership
+      const team = await this.prisma.auctionTeam.findUnique({
+        where: { id: teamId },
+      });
+
+      if (!team || team.ownerSessionId !== sessionId) {
+        client.emit('error', {
+          code: 'UNAUTHORIZED_TEAM',
+          message: 'You do not own this team',
+        });
+        return;
+      }
+
+      // Check if team has already passed
+      const alreadyPassed = await this.redis.checkTeamPassed(auctionId, playerId, teamId);
+      if (alreadyPassed) {
+        client.emit('error', {
+          code: 'ALREADY_PASSED',
+          message: 'You have already passed on this player',
+        });
+        return;
+      }
+
+      // Mark team as passed
+      await this.redis.markTeamPassed(auctionId, playerId, teamId);
+
+      // Log for analytics
+      console.log(`[PASS] Team ${team.teamName} passed on player ${playerId} in auction ${auctionId}`);
+
+      // Broadcast to room
+      const roomName = `auction:${auctionId}`;
+      this.server.to(roomName).emit('player_passed', {
+        playerId,
+        teamId,
+        teamName: team.teamName,
+        timestamp: new Date().toISOString(),
+      });
+
+      // Send confirmation to client
+      client.emit('pass_confirmed', {
+        playerId,
+        teamId,
+      });
+    } catch (error) {
+      console.error('Error passing player:', error);
+      client.emit('error', {
+        code: 'PASS_FAILED',
+        message: error.message || 'Failed to pass on player',
+      });
+    }
+  }
+
+  /**
+   * Team comes back to bidding after passing
+   */
+  @SubscribeMessage('come_back')
+  async handleComeBack(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() payload: { auctionId: string; playerId: string; teamId: string; sessionId: string },
+  ) {
+    try {
+      const { auctionId, playerId, teamId, sessionId } = payload;
+
+      // Verify team ownership
+      const team = await this.prisma.auctionTeam.findUnique({
+        where: { id: teamId },
+      });
+
+      if (!team || team.ownerSessionId !== sessionId) {
+        client.emit('error', {
+          code: 'UNAUTHORIZED_TEAM',
+          message: 'You do not own this team',
+        });
+        return;
+      }
+
+      // Check if team has actually passed
+      const hasPassed = await this.redis.checkTeamPassed(auctionId, playerId, teamId);
+      if (!hasPassed) {
+        client.emit('error', {
+          code: 'NOT_PASSED',
+          message: 'You have not passed on this player',
+        });
+        return;
+      }
+
+      // Fetch player info for the event
+      const player = await this.prisma.player.findUnique({
+        where: { id: playerId },
+      });
+
+      // Clear the pass status
+      await this.redis.clearTeamPass(auctionId, playerId, teamId);
+
+      // Log for analytics
+      console.log(`[COME_BACK] Team ${team.teamName} came back for player ${player?.name || playerId} in auction ${auctionId}`);
+
+      // Broadcast to room
+      const roomName = `auction:${auctionId}`;
+      this.server.to(roomName).emit('team_came_back', {
+        playerId,
+        playerName: player?.name,
+        teamId,
+        teamName: team.teamName,
+        timestamp: new Date().toISOString(),
+      });
+
+      // Send confirmation to client
+      client.emit('come_back_confirmed', {
+        playerId,
+        teamId,
+      });
+    } catch (error) {
+      console.error('Error coming back:', error);
+      client.emit('error', {
+        code: 'COME_BACK_FAILED',
+        message: error.message || 'Failed to come back',
       });
     }
   }
@@ -401,47 +706,60 @@ export class AuctionGateway implements OnGatewayConnection, OnGatewayDisconnect 
 
         console.log(`✅ SOLD: ${result.player?.name} → ${result.team.teamName} for ₹${result.finalPriceCr}Cr`);
 
-        // Auto-advance to next player
-        try {
-          const nextResult = await this.playerProgressionService.loadNextPlayer(auctionId);
+        // Auto-advance to next player (async to not block UI response)
+        setImmediate(async () => {
+          try {
+            const nextResult = await this.playerProgressionService.loadNextPlayer(auctionId);
 
-          // Check if round completed
-          if (nextResult.completed) {
-            this.server.to(roomName).emit('round_completed', {
-              message: nextResult.message,
+            // Check if round completed
+            if (nextResult.completed) {
+              this.server.to(roomName).emit('round_completed', {
+                message: nextResult.message,
+              });
+              console.log(`🎊 ${nextResult.message}`);
+              return;
+            }
+
+            // Get fresh auction state
+            const updatedAuction = await this.prisma.auction.findUnique({
+              where: { id: auctionId },
+              include: { currentPlayer: true },
             });
-            console.log(`🎊 ${nextResult.message}`);
-            return;
+
+            // Get RTM state if active, to ensure it's sent with the new player
+            const rtmState = await this.redis.getRTMState(auctionId);
+
+            // Check RTM eligibility for this player
+            const rtmEligibility = await this.rtmService.checkRTMEligibility(auctionId, nextResult.id);
+
+            // Broadcast new player
+            this.server.to(roomName).emit('new_player', {
+              player: {
+                id: nextResult.id,
+                name: nextResult.name,
+                role: nextResult.role,
+                country: nextResult.country,
+                basePriceLakh: nextResult.basePriceLakh,
+                isOverseas: nextResult.isOverseas,
+                isCapped: nextResult.isCapped,
+                auctionSet: nextResult.auctionSet,
+                iplTeam2024: nextResult.iplTeam2024, // ✅ NEW: Previous team
+                rtmEligible: rtmEligibility.eligible, // ✅ NEW: Is RTM available
+                rtmTeamId: rtmEligibility.teamId || null, // ✅ NEW: Which team can RTM
+                rtmTeamName: rtmEligibility.teamName || null, // ✅ NEW: RTM team name
+              },
+              currentSet: updatedAuction?.currentSet,
+              currentRound: updatedAuction?.currentRound,
+              rtmState: rtmState || null, // ✅ NEW: Include RTM state
+            });
+
+            console.log(`🎯 Next: ${nextResult.name}`);
+          } catch (nextError) {
+            console.error('❌ Failed to auto-advance after sale:', nextError);
+            console.error('Error details:', nextError.stack);
+            // Don't fail the sale operation if next player fails
           }
-
-          // Get fresh auction state
-          const updatedAuction = await this.prisma.auction.findUnique({
-            where: { id: auctionId },
-            include: { currentPlayer: true },
-          });
-
-          // Broadcast new player
-          this.server.to(roomName).emit('new_player', {
-            player: {
-              id: nextResult.id,
-              name: nextResult.name,
-              role: nextResult.role,
-              country: nextResult.country,
-              basePriceLakh: nextResult.basePriceLakh,
-              isOverseas: nextResult.isOverseas,
-              isCapped: nextResult.isCapped,
-              auctionSet: nextResult.auctionSet,
-            },
-            currentSet: updatedAuction?.currentSet,
-            currentRound: updatedAuction?.currentRound,
-          });
-
-          console.log(`🎯 Next: ${nextResult.name}`);
-        } catch (nextError) {
-          console.error('❌ Failed to auto-advance after sale:', nextError);
-          console.error('Error details:', nextError.stack);
-          // Don't fail the sale operation if next player fails
-        }
+        });
       }
     } catch (error) {
       console.error('Error selling player:', error);
@@ -513,46 +831,59 @@ export class AuctionGateway implements OnGatewayConnection, OnGatewayDisconnect 
 
       console.log(`⏭️  UNSOLD: ${result.player.name}`);
 
-      // Auto-advance to next player
-      try {
-        const nextResult = await this.playerProgressionService.loadNextPlayer(auctionId);
+      // Auto-advance to next player (async to not block UI response)
+      setImmediate(async () => {
+        try {
+          const nextResult = await this.playerProgressionService.loadNextPlayer(auctionId);
 
-        // Check if round completed
-        if (nextResult.completed) {
-          this.server.to(roomName).emit('round_completed', {
-            message: nextResult.message,
+          // Check if round completed
+          if (nextResult.completed) {
+            this.server.to(roomName).emit('round_completed', {
+              message: nextResult.message,
+            });
+            console.log(`🎊 ${nextResult.message}`);
+            return;
+          }
+
+          // Get fresh auction state
+          const updatedAuction = await this.prisma.auction.findUnique({
+            where: { id: auctionId },
+            include: { currentPlayer: true },
           });
-          console.log(`🎊 ${nextResult.message}`);
-          return;
+
+          // Get RTM state if active, to ensure it's sent with the new player
+          const rtmState = await this.redis.getRTMState(auctionId);
+
+          // Check RTM eligibility for this player
+          const rtmEligibility = await this.rtmService.checkRTMEligibility(auctionId, nextResult.id);
+
+          // Broadcast new player
+          this.server.to(roomName).emit('new_player', {
+            player: {
+              id: nextResult.id,
+              name: nextResult.name,
+              role: nextResult.role,
+              country: nextResult.country,
+              basePriceLakh: nextResult.basePriceLakh,
+              isOverseas: nextResult.isOverseas,
+              isCapped: nextResult.isCapped,
+              auctionSet: nextResult.auctionSet,
+              iplTeam2024: nextResult.iplTeam2024, // ✅ NEW: Previous team
+              rtmEligible: rtmEligibility.eligible, // ✅ NEW: Is RTM available
+              rtmTeamId: rtmEligibility.teamId || null, // ✅ NEW: Which team can RTM
+              rtmTeamName: rtmEligibility.teamName || null, // ✅ NEW: RTM team name
+            },
+            currentSet: updatedAuction?.currentSet,
+            currentRound: updatedAuction?.currentRound,
+            rtmState: rtmState || null, // ✅ NEW: Include RTM state
+          });
+
+          console.log(`🎯 Next: ${nextResult.name}`);
+        } catch (nextError) {
+          console.error('Failed to auto-advance after unsold:', nextError);
+          // Don't fail the unsold operation if next player fails
         }
-
-        // Get fresh auction state
-        const updatedAuction = await this.prisma.auction.findUnique({
-          where: { id: auctionId },
-          include: { currentPlayer: true },
-        });
-
-        // Broadcast new player
-        this.server.to(roomName).emit('new_player', {
-          player: {
-            id: nextResult.id,
-            name: nextResult.name,
-            role: nextResult.role,
-            country: nextResult.country,
-            basePriceLakh: nextResult.basePriceLakh,
-            isOverseas: nextResult.isOverseas,
-            isCapped: nextResult.isCapped,
-            auctionSet: nextResult.auctionSet,
-          },
-          currentSet: updatedAuction?.currentSet,
-          currentRound: updatedAuction?.currentRound,
-        });
-
-        console.log(`🎯 Next: ${nextResult.name}`);
-      } catch (nextError) {
-        console.error('Failed to auto-advance after unsold:', nextError);
-        // Don't fail the unsold operation if next player fails
-      }
+      });
     } catch (error) {
       console.error('Error marking unsold:', error);
       client.emit('error', {
@@ -613,8 +944,15 @@ export class AuctionGateway implements OnGatewayConnection, OnGatewayDisconnect 
         include: { currentPlayer: true },
       });
 
+      // Get RTM state if active, to ensure it's sent with the new player
+      const rtmState = await this.redis.getRTMState(auctionId);
+
       // Broadcast new player to all clients
       const roomName = `auction:${auctionId}`;
+
+      // Check RTM eligibility for this player
+      const rtmEligibility = await this.rtmService.checkRTMEligibility(auctionId, result.id);
+
       this.server.to(roomName).emit('new_player', {
         player: {
           id: result.id,
@@ -625,9 +963,14 @@ export class AuctionGateway implements OnGatewayConnection, OnGatewayDisconnect 
           isOverseas: result.isOverseas,
           isCapped: result.isCapped,
           auctionSet: result.auctionSet,
+          iplTeam2024: result.iplTeam2024, // ✅ NEW: Previous team
+          rtmEligible: rtmEligibility.eligible, // ✅ NEW: Is RTM available
+          rtmTeamId: rtmEligibility.teamId || null, // ✅ NEW: Which team can RTM
+          rtmTeamName: rtmEligibility.teamName || null, // ✅ NEW: RTM team name
         },
         currentSet: updatedAuction?.currentSet,
         currentRound: updatedAuction?.currentRound,
+        rtmState: rtmState || null, // ✅ NEW: Include RTM state
       });
 
       console.log(`🎯 NEW PLAYER: ${result.name} (${result.auctionSet})`);
@@ -654,9 +997,22 @@ export class AuctionGateway implements OnGatewayConnection, OnGatewayDisconnect 
       // Use RTM
       const result = await this.rtmService.useRTM(auctionId, teamId);
 
+      // Fetch full player details to include in the event payload
+      const player = await this.prisma.player.findUnique({
+        where: { id: result.state.playerId },
+      });
+
       // Broadcast RTM used - waiting for counter-bid
       const roomName = `auction:${auctionId}`;
       this.server.to(roomName).emit('rtm_used', {
+        // Add full player context for agents
+        playerId: result.state.playerId,
+        playerName: result.state.playerName,
+        // Use fresh player data from DB
+        isCapped: player?.isCapped ?? result.state.isCapped,
+        isOverseas: player?.isOverseas ?? false,
+        role: player?.role ?? 'UNKNOWN',
+        // Continue with RTM state
         rtmTeamId: result.state.rtmTeamId,
         rtmTeamName: result.state.rtmTeamName,
         matchedBidLakh: result.state.matchedBidLakh,
@@ -739,7 +1095,7 @@ export class AuctionGateway implements OnGatewayConnection, OnGatewayDisconnect 
 
       if (rtmState.counterBidMade) {
         // Stage 3: Counter-bid was made, only RTM team can accept/pass
-        if (rtmState.rtmTeamId !== teamId) {
+        if (rtmState.rtmTeamId !== teamId && rtmState.originalWinnerTeamId !== teamId) {
           client.emit('error', {
             code: 'UNAUTHORIZED',
             message: 'Only the RTM team can finalize after a counter-bid',
@@ -815,98 +1171,54 @@ export class AuctionGateway implements OnGatewayConnection, OnGatewayDisconnect 
         },
       });
 
-      // Invalidate caches after RTM finalization
-      await this.redis.invalidateAuctionCache(auctionId);
-      await this.redis.invalidateTeamCache(result.winningTeamId);
-      if (rtmState.rtmTeamId) {
-        await this.redis.invalidateTeamCache(rtmState.rtmTeamId);
-      }
+      // Auto-advance to next player (async to not block UI response)
+      setImmediate(async () => {
+        try {
+          const roomName = `auction:${auctionId}`;
+          const nextResult = await this.playerProgressionService.loadNextPlayer(auctionId);
 
-      // Fetch updated team stats after RTM finalization
-      const updatedTeam = await this.prisma.auctionTeam.findUnique({
-        where: { id: result.winningTeamId },
-      });
+          // Check if round completed
+          if (nextResult.completed) {
+            this.server.to(roomName).emit('round_completed', {
+              message: nextResult.message,
+            });
+            console.log(`🎊 ${nextResult.message}`);
+            return;
+          }
 
-      // Fetch RTM team stats if RTM was involved
-      const rtmTeam = rtmState.rtmTeamId ? await this.prisma.auctionTeam.findUnique({
-        where: { id: rtmState.rtmTeamId },
-      }) : null;
-
-      // Broadcast final outcome with full player and team info
-      const roomName = `auction:${auctionId}`;
-      this.server.to(roomName).emit('player_sold', {
-        playerId: player.id,
-        playerName: player.name,
-        teamId: result.winningTeamId,
-        teamName: result.winningTeamName,
-        finalPriceCr: result.finalPriceLakh / 100,
-        isRtm: result.isRTM,
-        winningTeam: updatedTeam ? {
-          id: updatedTeam.id,
-          teamName: updatedTeam.teamName,
-          purseRemainingCr: toNumber(updatedTeam.purseRemainingCr),
-          playerCount: updatedTeam.playerCount,
-          overseasCount: updatedTeam.overseasCount,
-          rtmCardsUsed: updatedTeam.rtmCardsUsed,
-          rtmCardsTotal: updatedTeam.rtmCardsTotal,
-          rtmCappedUsed: updatedTeam.rtmCappedUsed,
-          rtmUncappedUsed: updatedTeam.rtmUncappedUsed,
-        } : undefined,
-        rtmTeam: rtmTeam ? {
-          id: rtmTeam.id,
-          teamName: rtmTeam.teamName,
-          purseRemainingCr: toNumber(rtmTeam.purseRemainingCr),
-          playerCount: rtmTeam.playerCount,
-          overseasCount: rtmTeam.overseasCount,
-          rtmCardsUsed: rtmTeam.rtmCardsUsed,
-          rtmCardsTotal: rtmTeam.rtmCardsTotal,
-          rtmCappedUsed: rtmTeam.rtmCappedUsed,
-          rtmUncappedUsed: rtmTeam.rtmUncappedUsed,
-        } : undefined,
-      });
-
-      console.log(`✅ RTM Final: ${player.name} → ${result.winningTeamName} (₹${result.finalPriceLakh}L)`);
-
-      // Auto-advance to next player
-      try {
-        const nextResult = await this.playerProgressionService.loadNextPlayer(auctionId);
-
-        // Check if round completed
-        if (nextResult.completed) {
-          this.server.to(roomName).emit('round_completed', {
-            message: nextResult.message,
+          // Get fresh auction state
+          const updatedAuction = await this.prisma.auction.findUnique({
+            where: { id: auctionId },
+            include: { currentPlayer: true },
           });
-          console.log(`🎊 ${nextResult.message}`);
-          return;
+
+          // Check RTM eligibility for this player
+          const rtmEligibility = await this.rtmService.checkRTMEligibility(auctionId, nextResult.id);
+
+          // Broadcast new player
+          this.server.to(roomName).emit('new_player', {
+            player: {
+              id: nextResult.id,
+              name: nextResult.name,
+              role: nextResult.role,
+              country: nextResult.country,
+              basePriceLakh: nextResult.basePriceLakh,
+              isOverseas: nextResult.isOverseas,
+              isCapped: nextResult.isCapped,
+              auctionSet: nextResult.auctionSet,
+              iplTeam2024: nextResult.iplTeam2024,
+              rtmEligible: rtmEligibility.eligible,
+              rtmTeamId: rtmEligibility.teamId || null,
+              rtmTeamName: rtmEligibility.teamName || null,
+            },
+            currentSet: updatedAuction?.currentSet,
+            currentRound: updatedAuction?.currentRound,
+            rtmState: null, // RTM is finalized, so no active RTM state
+          });
+        } catch (nextError) {
+          console.error('Failed to auto-advance after RTM finalization:', nextError);
         }
-
-        // Get fresh auction state
-        const updatedAuction = await this.prisma.auction.findUnique({
-          where: { id: auctionId },
-          include: { currentPlayer: true },
-        });
-
-        // Broadcast new player
-        this.server.to(roomName).emit('new_player', {
-          player: {
-            id: nextResult.id,
-            name: nextResult.name,
-            role: nextResult.role,
-            country: nextResult.country,
-            basePriceLakh: nextResult.basePriceLakh,
-            isOverseas: nextResult.isOverseas,
-            isCapped: nextResult.isCapped,
-            auctionSet: nextResult.auctionSet,
-          },
-          currentSet: updatedAuction?.currentSet,
-          currentRound: updatedAuction?.currentRound,
-        });
-
-        console.log(`🎯 Next: ${nextResult.name}`);
-      } catch (nextError) {
-        console.error('Failed to auto-advance after RTM:', nextError);
-        // Don't fail the RTM operation if next player fails
-      }
+      });
     } catch (error) {
       console.error('Error finalizing RTM:', error);
       client.emit('error', {

@@ -40,12 +40,15 @@ export interface OrchestratorConfig {
 export interface AgentSpawnOptions {
   teamCode: TeamCode;
   auctionCode: string;
+  config?: any; // Add a more specific type if possible
+  delayMs?: number;
 }
 
 /**
  * Orchestrator event
  */
 export interface OrchestratorEvent {
+  type: string;
   teamCode: TeamCode;
   data?: any;
 }

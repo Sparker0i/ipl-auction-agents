@@ -101,6 +101,7 @@ export interface PlayerQuality {
  */
 export interface BidContext {
   player: {
+    id: string; // CRITICAL: Player ID for cache key generation
     name: string;
     role: PlayerRole;
     country: string;

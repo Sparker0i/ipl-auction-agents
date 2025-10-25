@@ -408,7 +408,7 @@ console.log('📋 Step 5: Updating player information from auction data...');
 let updatedPlayers = 0;
 let insertedPlayers = 0;
 
-for (const [name, auctionPlayer] of auctionPlayers) {
+for (const [_name, auctionPlayer] of auctionPlayers) {
   // Check if player exists
   const existing = await db.getPlayer(auctionPlayer.id);
 
@@ -475,9 +475,9 @@ for (const playerId of playerIds) {
   // Store in database
   await db.upsertPlayerStats(playerId, {
     playerId,
-    batting: battingStats,
-    bowling: bowlingStats,
-    fielding: fieldingStats,
+    battingStats: battingStats,
+    bowlingStats: bowlingStats,
+    fieldingStats: fieldingStats,
     lastUpdated: new Date(),
   });
 
@@ -509,12 +509,12 @@ console.log('\n🔍 Missing Player Data:\n');
 let missingCount = 0;
 const missingPlayers: string[] = [];
 
-for (const [name, auctionPlayer] of auctionPlayers) {
+for (const [_name, auctionPlayer] of auctionPlayers) {
   const stats = await db.getPlayerStats(auctionPlayer.id);
 
   if (!stats) {
     missingCount++;
-    missingPlayers.push(name);
+    missingPlayers.push(_name);
   }
 }
 

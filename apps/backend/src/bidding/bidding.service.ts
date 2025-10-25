@@ -148,16 +148,30 @@ export class BiddingService {
       return { valid: false, error: 'Player not found' };
     }
 
+    // Check if team has passed - they must click "Come Back" first
+    const hasPassed = await this.redis.checkTeamPassed(auctionId, playerId, teamId);
+    if (hasPassed) {
+      return { valid: false, error: 'You must click "Come Back" before bidding' };
+    }
+
     // Validate bid amount
     // If no bids yet (currentBidLakh is null), first bid must be at least base price
-    // Otherwise, bid must be at least current bid + increment
+    // Otherwise, bid must be STRICTLY HIGHER than current bid AND meet minimum increment
     let minNextBid: number;
 
     if (auction.currentBidLakh === null) {
       // First bid - must be at least base price (no increment required)
       minNextBid = player.basePriceLakh;
     } else {
-      // Subsequent bids - must be current bid + increment
+      // Subsequent bids - must be HIGHER than current bid
+      if (bidAmountLakh <= auction.currentBidLakh) {
+        return {
+          valid: false,
+          error: `Bid must be higher than current bid of ₹${auction.currentBidLakh}L`,
+        };
+      }
+
+      // Also must meet minimum increment requirement
       minNextBid = this.calculateNextBid(auction.currentBidLakh);
     }
 
@@ -211,6 +225,24 @@ export class BiddingService {
     const validation = await this.validateBid(auctionId, teamId, playerId, bidAmountLakh);
     if (!validation.valid) {
       throw new BadRequestException(validation.error);
+    }
+
+    // Get current bid before update for race condition detection
+    const currentBid = await this.prisma.auction.findUnique({
+      where: { id: auctionId },
+      select: { currentBidLakh: true, currentPlayerId: true },
+    });
+
+    // Final check: ensure bid is still valid (prevent race conditions)
+    // If currentBid changed between validation and now, reject the bid
+    if (currentBid?.currentPlayerId !== playerId) {
+      throw new BadRequestException('Player changed during bidding');
+    }
+
+    if (currentBid?.currentBidLakh !== null && bidAmountLakh <= currentBid.currentBidLakh) {
+      throw new BadRequestException(
+        `Bid rejected: Current bid is now ₹${currentBid.currentBidLakh}L (your bid: ₹${bidAmountLakh}L)`
+      );
     }
 
     // Update auction with new bid

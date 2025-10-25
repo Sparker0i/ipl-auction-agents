@@ -5,7 +5,6 @@ import {
   AgentProcess,
   AgentSpawnOptions,
   OrchestratorEvent,
-  EventHandler,
 } from '../types/orchestrator.types.js';
 import { TeamCode } from '../types/agent.types.js';
 import type { Logger } from 'winston';
@@ -13,6 +12,8 @@ import type { Logger } from 'winston';
 // ES module equivalent of __dirname
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+export type EventHandler = (event: OrchestratorEvent) => void;
 
 /**
  * Agent process spawner and manager
@@ -31,7 +32,7 @@ export class AgentSpawner {
    * Spawn an agent process
    */
   async spawnAgent(options: AgentSpawnOptions): Promise<AgentProcess> {
-    const { teamCode, auctionCode, config, delayMs = 0 } = options;
+    const { teamCode, auctionCode, delayMs = 0 } = options;
 
     // Wait for delay if specified (to stagger agent starts)
     if (delayMs > 0) {
@@ -314,11 +315,11 @@ export class AgentSpawner {
    * Emit event to handlers
    */
   private emitEvent(
-    type: OrchestratorEvent,
-    teamCode?: TeamCode,
+    type: string,
+    teamCode: TeamCode,
     data?: any
   ): void {
-    const event = { type, teamCode, data };
+    const event: OrchestratorEvent = { type, teamCode, data };
     this.eventHandlers.forEach((handler) => {
       try {
         handler(event);

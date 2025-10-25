@@ -220,9 +220,9 @@ export class StatsEngine {
 
       if (venueStats && venueStats.matches >= 3) {
         // Good performance at venue
-        if (venueStats.performance.batting!.strikeRate > 130) return 0.8;
-        if (venueStats.performance.batting!.strikeRate > 115) return 0.5;
-        if (venueStats.performance.batting!.strikeRate > 100) return 0.3;
+        if (venueStats.strikeRate > 130) return 0.8;
+        if (venueStats.strikeRate > 115) return 0.5;
+        if (venueStats.strikeRate > 100) return 0.3;
       }
     }
 
@@ -234,9 +234,9 @@ export class StatsEngine {
 
       if (venueStats && venueStats.matches >= 3) {
         // Good performance at venue
-        if (venueStats.performance.bowling!.economy < 7.5) return 0.8;
-        if (venueStats.performance.bowling!.economy < 8.5) return 0.5;
-        if (venueStats.performance.bowling!.economy < 9.5) return 0.3;
+        if (venueStats.economy < 7.5) return 0.8;
+        if (venueStats.economy < 8.5) return 0.5;
+        if (venueStats.economy < 9.5) return 0.3;
       }
     }
 

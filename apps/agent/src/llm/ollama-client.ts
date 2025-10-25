@@ -73,7 +73,7 @@ export class OllamaClient {
           throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
         }
 
-        const data: OllamaGenerateResponse = await response.json();
+        const data = (await response.json()) as OllamaGenerateResponse;
 
         const duration = Date.now() - startTime;
         this.logger.info('Ollama query completed', {
@@ -197,7 +197,7 @@ export class OllamaClient {
         throw new Error('Failed to fetch models');
       }
 
-      const data = await response.json();
+      const data = (await response.json()) as { models: { name: string }[] };
       return data.models?.map((m: any) => m.name) || [];
     } catch (error) {
       this.logger.error('Failed to list models', { error });

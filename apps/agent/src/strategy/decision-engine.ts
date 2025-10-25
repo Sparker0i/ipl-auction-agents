@@ -33,7 +33,7 @@ export class DecisionEngine {
   private llmConfig: LLMConfig;
   private decisionCache: Map<string, CachedDecision> = new Map();
   private readonly DECISION_CACHE_TTL = 30000; // 30 seconds
-  private promptTemplateCache: Map<string, string> = new Map(); // Template caching
+
 
   constructor(
     strategy: TeamStrategy,
@@ -87,6 +87,7 @@ export class DecisionEngine {
       // 4. Build decision context
       const context: BidContext = {
         player: {
+          id: player.id, // CRITICAL: Include player ID for correct cache key
           name: player.name,
           role: player.role,
           country: player.country,
@@ -165,6 +166,7 @@ export class DecisionEngine {
   /**
    * Generate cache key for decision caching
    * Price-aware: different prices create different cache keys
+   * CRITICAL: Use player ID (not name) to ensure correct player matching
    */
   private getCacheKey(
     playerId: string,
@@ -225,9 +227,9 @@ export class DecisionEngine {
     playerStats?: any,
     calculatedMaxBid?: number
   ): Promise<LLMDecision> {
-    // Generate cache key based on player, price, phase, and budget
+    // Generate cache key based on player ID (not name!), price, phase, and budget
     const cacheKey = this.getCacheKey(
-      context.player.name, // Use player name as ID
+      context.player.id, // CRITICAL: Use player ID, not name
       context.player.currentBid,
       context.squad.phase,
       context.squad.budgetRemaining > 1000
@@ -318,12 +320,13 @@ export class DecisionEngine {
     // CRITICAL: Calculate available budget with reserves (same logic as fallback)
     const minSlotsNeeded = Math.max(0, 18 - context.squad.currentSize);
     const reservedBudget = minSlotsNeeded * 30; // 30L per remaining mandatory slot
-    const availableBudget = context.squad.budgetRemaining - reservedBudget;
+    const budgetRemaining = context.squad.budgetRemaining ?? 5500; // Default to 55cr if null
+    const availableBudget = budgetRemaining - reservedBudget;
 
     this.logger.info('LLM decision budget validation', {
       player: context.player.name,
       llmMaxBid: maxBid,
-      budgetRemaining: context.squad.budgetRemaining,
+      budgetRemaining: budgetRemaining,
       reservedBudget,
       availableBudget,
       currentBid: context.player.currentBid,
@@ -347,7 +350,7 @@ export class DecisionEngine {
 
     // Apply budget constraints
     const canAfford = this.budgetManager.canAffordBid(
-      context.squad.budgetRemaining,
+      budgetRemaining,
       context.squad.currentSize,
       maxBid
     );
@@ -355,7 +358,7 @@ export class DecisionEngine {
     if (!canAfford) {
       // Reduce to affordable amount or pass
       const affordable = this.budgetManager.calculateMaxBid(
-        context.squad.budgetRemaining,
+        budgetRemaining,
         context.squad.currentSize,
         context.player.basePrice,
         context.quality
@@ -378,6 +381,14 @@ export class DecisionEngine {
     const teamMaxInLakhs = this.strategy.specialRules.maxBidPerPlayer * 100;
     if (maxBid > teamMaxInLakhs) {
       maxBid = teamMaxInLakhs;
+    }
+
+    // ✅ NEW: Sanity check - maxBid must be positive
+    if (maxBid <= 0) {
+      return {
+        shouldBid: false,
+        reasoning: `Calculated maxBid is non-positive (₹${(maxBid / 100).toFixed(2)}cr)`,
+      };
     }
 
     // Final check: is the capped maxBid below current bid?

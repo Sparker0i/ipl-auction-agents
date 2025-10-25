@@ -4,7 +4,7 @@
 
 import { parse } from 'yaml';
 import { readFileSync } from 'fs';
-import { MatchData, DeliveryData, PlayerPerformance } from '../types/player.types.js';
+import { MatchData, PlayerPerformance } from '../types/player.types.js';
 
 export class MatchParser {
   /**

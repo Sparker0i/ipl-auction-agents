@@ -134,7 +134,7 @@ export class PerformanceProfiler {
   /**
    * Record LLM call
    */
-  recordLLMCall(teamCode: string, cached: boolean): void {
+  recordLLMCall(cached: boolean): void {
     this.metrics.systemMetrics.totalLLMCalls++;
     if (cached) {
       this.metrics.systemMetrics.llmCacheHits++;

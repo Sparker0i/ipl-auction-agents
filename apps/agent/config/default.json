@@ -9,8 +9,8 @@
   "browser": {
     "headless": true,
     "viewport": {
-      "width": 600,
-      "height": 400
+      "width": 400,
+      "height": 300
     },
     "slowMo": 0,
     "timeout": 10000,

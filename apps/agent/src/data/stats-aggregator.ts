@@ -270,7 +270,7 @@ export class StatsAggregator {
       : 0;
 
     // Venue stats
-    for (const [venue, stats] of venueStatsMap) {
+    for (const [_venue, stats] of venueStatsMap) {
       stats.economy = stats.overs > 0 ? (totalRuns / stats.overs) : 0;
       stats.average = stats.wickets > 0 ? (totalRuns / stats.wickets) : 0;
     }

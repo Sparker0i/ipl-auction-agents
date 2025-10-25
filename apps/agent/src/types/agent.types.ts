@@ -121,6 +121,7 @@ export interface AgentConfig {
   bidDelayMs: number;
   stateCheckIntervalMs: number;
   initialBudgetLakh?: number; // Team's actual budget in lakhs (fetched from database)
+  isRejoin?: boolean; // Flag to indicate if agent is rejoining (skips lobby/team selection)
 }
 
 /**
@@ -133,6 +134,7 @@ export interface IAuctionAgent {
 
   // Core functionality
   selectTeam(teamName: string): Promise<void>;
+  rejoinAuction(): Promise<void>; // Rejoin auction bypassing team selection
   waitForAuctionStart(): Promise<void>;
   monitorAuction(): Promise<void>;
 

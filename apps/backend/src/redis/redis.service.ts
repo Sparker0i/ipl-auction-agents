@@ -191,4 +191,32 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     }
     await pipeline.exec();
   }
+
+  // Pass tracking operations
+  async markTeamPassed(auctionId: string, playerId: string, teamId: string): Promise<void> {
+    const key = `auction:${auctionId}:player:${playerId}:passes`;
+    await this.client.sAdd(key, teamId);
+    // Set expiry: passes are valid only for this player's auction
+    await this.client.expire(key, 300); // 5 minutes
+  }
+
+  async checkTeamPassed(auctionId: string, playerId: string, teamId: string): Promise<boolean> {
+    const key = `auction:${auctionId}:player:${playerId}:passes`;
+    return this.client.sIsMember(key, teamId);
+  }
+
+  async clearTeamPass(auctionId: string, playerId: string, teamId: string): Promise<void> {
+    const key = `auction:${auctionId}:player:${playerId}:passes`;
+    await this.client.sRem(key, teamId);
+  }
+
+  async getPassedTeams(auctionId: string, playerId: string): Promise<string[]> {
+    const key = `auction:${auctionId}:player:${playerId}:passes`;
+    return this.client.sMembers(key);
+  }
+
+  async clearPassesForPlayer(auctionId: string, playerId: string): Promise<void> {
+    const key = `auction:${auctionId}:player:${playerId}:passes`;
+    await this.client.del(key);
+  }
 }

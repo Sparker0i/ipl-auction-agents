@@ -145,7 +145,7 @@ Your goal is to build a competitive squad within budget constraints while follow
 **Current Bid**: ₹${(player.currentBid / 100).toFixed(2)} cr`;
 
     if (playerStats) {
-      section += '\n\n' + this.buildStatsSection(playerStats, context.strategy.homeVenue);
+      section += '\n\n' + this.buildStatsSection(playerStats);
     } else {
       section += '\n\n**Statistics**: Not available (proceed with base analysis)';
     }
@@ -160,7 +160,7 @@ Your goal is to build a competitive squad within budget constraints while follow
   /**
    * Build statistics section
    */
-  private buildStatsSection(stats: PlayerStats, homeVenue: string): string {
+  private buildStatsSection(stats: PlayerStats): string {
     const parts: string[] = ['**Player Statistics** (T20 2015-2025):'];
 
     if (stats.battingStats) {
@@ -171,7 +171,8 @@ Your goal is to build a competitive squad within budget constraints while follow
 
       if (stats.battingStats.recentForm) {
         const rf = stats.battingStats.recentForm;
-        parts.push(`  - Recent Form: ${rf.trend}, avg SR ${rf.averageStrikeRate?.toFixed(1) || 'N/A'}`);
+        const avgRecentSR = rf.strikeRates.length > 0 ? rf.strikeRates.reduce((a, b) => a + b, 0) / rf.strikeRates.length : 0;
+        parts.push(`  - Recent Form: ${rf.trend}, avg SR ${avgRecentSR > 0 ? avgRecentSR.toFixed(1) : 'N/A'}`);
       }
     }
 

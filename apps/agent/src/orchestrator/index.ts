@@ -1,11 +1,5 @@
-/**
- * Orchestrator Entry Point
- * Spawns and manages 9 concurrent auction agents
- */
-
 import { EventEmitter } from 'events';
 import * as path from 'path';
-import { PrismaClient } from '@prisma/client';
 import { AgentSpawner } from './agent-spawner.js';
 import { HealthMonitor } from './health-monitor.js';
 import { LogAggregator } from './log-aggregator.js';
@@ -298,7 +292,7 @@ export class Orchestrator extends EventEmitter {
 
       // Also pass to message handler if there's message data
       if (data) {
-        this.handleAgentMessage({ teamCode, data });
+        this.handleAgentMessage({ type, teamCode, data });
       }
     });
   }
@@ -339,7 +333,6 @@ export class Orchestrator extends EventEmitter {
 
       case 'llm_call':
         this.profiler.recordLLMCall(
-          teamCode,
           messageData.cached || false
         );
         break;

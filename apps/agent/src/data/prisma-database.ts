@@ -5,6 +5,7 @@
 
 import { PrismaClient, Prisma } from '@prisma/client';
 import { Player, PlayerStats, PlayerPerformance, MatchData } from '../types/player.types.js';
+import { PlayerRole } from '../types/agent.types.js';
 import { DatabasePool } from './database-pool.js';
 
 export class PrismaDatabase {
@@ -78,7 +79,7 @@ export class PrismaDatabase {
       id: player.id,
       name: player.name,
       country: player.country ?? undefined,
-      role: player.role ?? undefined,
+      role: (player.role as PlayerRole) ?? undefined,
       isOverseas: player.isOverseas,
       isCapped: player.isCapped,
     };
@@ -95,7 +96,7 @@ export class PrismaDatabase {
       id: player.id,
       name: player.name,
       country: player.country ?? undefined,
-      role: player.role ?? undefined,
+      role: (player.role as PlayerRole) ?? undefined,
       isOverseas: player.isOverseas,
       isCapped: player.isCapped,
     };
@@ -109,14 +110,14 @@ export class PrismaDatabase {
         date: match.date ? new Date(match.date) : null,
         venue: match.venue,
         matchType: match.matchType,
-        teams: match.teams as Prisma.JsonValue,
+        teams: match.teams as unknown as Prisma.InputJsonValue,
       },
       create: {
         matchId: match.matchId,
         date: match.date ? new Date(match.date) : null,
         venue: match.venue,
         matchType: match.matchType,
-        teams: match.teams as Prisma.JsonValue,
+        teams: match.teams as unknown as Prisma.InputJsonValue,
       },
     });
   }
@@ -127,9 +128,9 @@ export class PrismaDatabase {
       await this.prisma.playerPerformance.create({
         data: {
           playerName: '',
-          batting: performance.batting as Prisma.JsonValue,
-          bowling: performance.bowling as Prisma.JsonValue,
-          fielding: performance.fielding as Prisma.JsonValue,
+          batting: (performance.batting ?? null) as Prisma.InputJsonValue,
+          bowling: (performance.bowling ?? null) as Prisma.InputJsonValue,
+          fielding: (performance.fielding ?? null) as Prisma.InputJsonValue,
           match: {
             connect: { matchId: performance.matchId },
           },
@@ -158,15 +159,15 @@ export class PrismaDatabase {
     await this.prisma.playerStats.upsert({
       where: { playerId },
       update: {
-        battingStats: stats.batting as Prisma.JsonValue,
-        bowlingStats: stats.bowling as Prisma.JsonValue,
-        fieldingStats: stats.fielding as Prisma.JsonValue,
+        battingStats: (stats.battingStats ?? null) as unknown as Prisma.InputJsonValue,
+        bowlingStats: (stats.bowlingStats ?? null) as unknown as Prisma.InputJsonValue,
+        fieldingStats: (stats.fieldingStats ?? null) as unknown as Prisma.InputJsonValue,
       },
       create: {
         playerId,
-        battingStats: stats.batting as Prisma.JsonValue,
-        bowlingStats: stats.bowling as Prisma.JsonValue,
-        fieldingStats: stats.fielding as Prisma.JsonValue,
+        battingStats: (stats.battingStats ?? null) as unknown as Prisma.InputJsonValue,
+        bowlingStats: (stats.bowlingStats ?? null) as unknown as Prisma.InputJsonValue,
+        fieldingStats: (stats.fieldingStats ?? null) as unknown as Prisma.InputJsonValue,
       },
     });
   }
@@ -180,9 +181,9 @@ export class PrismaDatabase {
 
     return {
       playerId: stats.playerId,
-      batting: stats.battingStats as any,
-      bowling: stats.bowlingStats as any,
-      fielding: stats.fieldingStats as any,
+      battingStats: stats.battingStats as any,
+      bowlingStats: stats.bowlingStats as any,
+      fieldingStats: stats.fieldingStats as any,
       lastUpdated: stats.lastUpdated,
     };
   }
@@ -202,9 +203,9 @@ export class PrismaDatabase {
     for (const stats of statsRecords) {
       statsMap.set(stats.playerId, {
         playerId: stats.playerId,
-        batting: stats.battingStats as any,
-        bowling: stats.bowlingStats as any,
-        fielding: stats.fieldingStats as any,
+        battingStats: stats.battingStats as any,
+        bowlingStats: stats.bowlingStats as any,
+        fieldingStats: stats.fieldingStats as any,
         lastUpdated: stats.lastUpdated,
       });
     }

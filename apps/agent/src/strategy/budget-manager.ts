@@ -27,11 +27,11 @@ export class BudgetManager {
   ): number {
     const remainingBudget = currentBudget; // in lakhs
     const minSquadSize = 18;
-    const maxSquadSize = 25;
+
 
     // Calculate minimum slots we need to fill
     const minSlotsNeeded = Math.max(0, minSquadSize - squadSize);
-    const maxSlotsAvailable = maxSquadSize - squadSize;
+
 
     // Get budget allocation for current phase
     const allocation = this.getBudgetAllocation(squadSize);

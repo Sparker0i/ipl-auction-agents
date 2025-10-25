@@ -95,8 +95,8 @@ export class BrowserPool {
       });
 
       // Disable unnecessary features to save resources
-      // Block image loading to save bandwidth and memory
-      await context.route('**/*.{png,jpg,jpeg,gif,svg,webp,ico}', route => {
+      // Block images, fonts, and CSS to reduce memory usage
+      await context.route('**/*.{png,jpg,jpeg,gif,svg,webp,ico,woff,woff2,ttf,eot,css}', route => {
         route.abort();
       });
 
@@ -118,12 +118,7 @@ export class BrowserPool {
       // Set default timeout
       page.setDefaultTimeout(this.config?.timeout || 10000);
 
-      // Listen to console messages (optional, can be disabled for performance)
-      page.on('console', (msg) => {
-        this.logger?.debug(`Browser console [${agentId}]: ${msg.text()}`);
-      });
-
-      // Listen to page errors
+      // Only listen to critical page errors (console logging disabled for performance)
       page.on('pageerror', (error) => {
         this.logger?.error(`Browser page error [${agentId}]`, { error: error.message });
       });

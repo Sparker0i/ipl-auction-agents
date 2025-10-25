@@ -6,7 +6,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as readline from 'readline';
-import type { LogConfig } from '../types/agent.types.js';
+
+export interface LogConfig {
+  directory: string;
+}
 
 export interface LogEntry {
   timestamp: string;
@@ -17,7 +20,6 @@ export interface LogEntry {
 }
 
 export class LogAggregator {
-  private config: LogConfig;
   private logDirectory: string;
   private watchers: fs.FSWatcher[] = [];
   private aggregatedLogPath: string;
@@ -25,7 +27,6 @@ export class LogAggregator {
   private running: boolean = false;
 
   constructor(config: LogConfig) {
-    this.config = config;
     this.logDirectory = config.directory;
     this.aggregatedLogPath = path.join(this.logDirectory, 'combined.log');
   }

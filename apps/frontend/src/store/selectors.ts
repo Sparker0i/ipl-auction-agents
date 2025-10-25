@@ -9,6 +9,7 @@ export const selectCurrentRound = (state: RootState) => state.auction.currentRou
 export const selectCurrentSet = (state: RootState) => state.auction.currentSet;
 export const selectRoomCode = (state: RootState) => state.auction.roomCode;
 export const selectBidHistory = (state: RootState) => state.auction.bidHistory;
+export const selectEventHistory = (state: RootState) => state.auction.eventHistory;
 export const selectRTMState = (state: RootState) => state.auction.rtmState;
 
 // Teams selectors

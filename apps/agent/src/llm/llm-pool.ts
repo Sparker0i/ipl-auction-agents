@@ -1,5 +1,5 @@
 import { OllamaClient } from './ollama-client.js';
-import { LLMConfig, LLMDecision } from '../types/llm.types.js';
+import { LLMConfig } from '../types/llm.types.js';
 import type { Logger } from 'winston';
 
 /**
